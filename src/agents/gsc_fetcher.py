@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timedelta
 from typing import Callable
 
@@ -10,6 +11,9 @@ from googleapiclient.discovery import build
 
 from src.config.settings import GSC_SCOPES, GSC_PAGE_SIZE
 from src.utils.helpers import compute_opportunity_score, normalize_url
+
+# Allow Google to return a superset of requested scopes without raising an error
+os.environ.setdefault("OAUTHLIB_RELAX_TOKEN_SCOPE", "1")
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,6 @@ def get_auth_url(client_id: str, client_secret: str, redirect_uri: str) -> tuple
     auth_url, state = flow.authorization_url(
         prompt="consent",
         access_type="offline",
-        include_granted_scopes="true",
     )
     return auth_url, state, flow
 
