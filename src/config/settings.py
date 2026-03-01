@@ -27,7 +27,7 @@ MAX_QUERIES_PER_CLUSTER_BATCH = int(os.getenv("MAX_QUERIES_PER_CLUSTER_BATCH", "
 
 # GSC API
 GSC_PAGE_SIZE = 25000  # Max rows per API request
-GSC_SCOPES = ["https://www.googleapis.com/auth/webmasters.readonly"]
+GSC_SCOPES = ["https://www.googleapis.com/auth/webmasters"]
 
 # Output
 OUTPUTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "outputs")
