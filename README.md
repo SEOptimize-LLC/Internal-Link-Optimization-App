@@ -15,7 +15,7 @@ A Streamlit app that uses Google Search Console data and a Business Profile docu
 ## Link Recommendation Types
 
 | Priority | Type | Logic |
-|---|---|---|
+| --- | --- | --- |
 | P1 — Critical | Pillar ↔ Cluster | Bidirectional structural links within every SILO |
 | P2 — High | Authority Boost | Top-click pages → high-impression/underperforming pages in same cluster |
 | P3 — Recommended | Blog → Money Page | AI matches each content page to the most relevant service/product/category page |
@@ -24,7 +24,7 @@ A Streamlit app that uses Google Search Console data and a Business Profile docu
 ## Tech Stack
 
 - **UI**: Streamlit
-- **GSC**: Google Search Console API (Service Account)
+- **GSC**: Google Search Console API (OAuth2 — sign in with Google)
 - **AI**: OpenRouter → Claude Sonnet 4.5 (reasoning) + Gemini 2.0 Flash (batch clustering)
 - **Storage**: Supabase (PostgreSQL) + local file exports
 - **Visualization**: networkx + Plotly (interactive SILO diagram)
@@ -40,36 +40,52 @@ cd Internal-Link-Optimization-App
 pip install -r requirements.txt
 ```
 
-### 2. Configure environment variables
+### 2. Create a Google OAuth2 Client ID
+
+The app authenticates with Google Search Console via OAuth2 — no service account JSON needed.
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com)
+2. Select your project (or create one)
+3. Go to **APIs & Services → Library** and enable the **Google Search Console API**
+4. Go to **APIs & Services → Credentials**
+5. Click **Create Credentials → OAuth 2.0 Client ID**
+6. Application type: **Web application**
+7. Under **Authorized redirect URIs**, add:
+   - `http://localhost:8501` (local development)
+   - Your Streamlit Cloud URL if deploying (e.g. `https://your-app.streamlit.app`)
+8. Click **Create** — copy the **Client ID** and **Client Secret**
+
+### 3. Configure secrets
+
+Copy the template and fill it in:
 
 ```bash
-cp .env.example .env
+cp .streamlit/secrets_template.toml .streamlit/secrets.toml
 ```
 
-Fill in `.env`:
+Edit `.streamlit/secrets.toml`:
 
-```env
-OPENROUTER_API_KEY=your_key_here
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_SERVICE_KEY=your_service_role_key_here
+```toml
+[google]
+client_id = "your_google_oauth_client_id"
+client_secret = "your_google_oauth_client_secret"
+redirect_uri = "http://localhost:8501"
+
+OPENROUTER_API_KEY = "sk-or-your-key-here"
+
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_SERVICE_KEY = "sb_secret_your-key-here"
 ```
 
-### 3. Set up Supabase
+> `secrets.toml` is gitignored and will never be committed. The template file (`secrets_template.toml`) is committed as a reference only.
+
+### 4. Set up Supabase
 
 Run the migration in your Supabase SQL editor:
 
-```
+```text
 supabase/migrations/20260301_internal_link_agent_schema.sql
 ```
-
-### 4. GSC Service Account
-
-- Create a service account in Google Cloud Console
-- Enable the Google Search Console API
-- Download the JSON key file
-- Add the service account email as a **verified owner or full user** in GSC for each property
-
-You'll upload the JSON key file directly in the app UI — no `.env` entry needed.
 
 ### 5. Run
 
@@ -79,22 +95,27 @@ streamlit run app.py
 
 ## Usage
 
-**Step 1 — Setup**
+### Step 1 — Setup
+
 - Enter client name
-- Upload your GSC service account JSON → select the property from the dropdown
+- Click **Sign in with Google** → authorize read-only access to Search Console → select property from the dropdown
 - Set date range (default: 90 days)
 - Upload the Business Profile document (`.txt`, `.md`, `.pdf`, `.docx`) or paste a Google Doc URL
 
-**Step 2 — Analysis runs automatically** (6 steps with live progress)
+### Step 2 — Analysis
 
-**Step 3 — Results Dashboard**
+Analysis runs automatically across 6 steps with live progress indicators.
+
+### Step 3 — Results Dashboard
+
 - Interactive SILO diagram (hover for details)
 - Filterable link recommendations table
 - Full page taxonomy
 - Keyword clusters with LSI terms
 - Per-page incoming/outgoing link plan
 
-**Exports** (sidebar):
+### Exports (sidebar)
+
 - CSV — `source_url | target_url | anchor_text | link_type | priority | reason | silo_name | implementation_status`
 - HTML report — per-page breakdown, dark-themed, filterable
 - All results saved to Supabase with a unique `run_id`
@@ -114,10 +135,12 @@ Supported formats: `.txt`, `.md`, `.pdf`, `.docx`, or a public Google Doc URL.
 
 ## Project Structure
 
-```
+```text
 ├── app.py                          # Streamlit entry point
 ├── requirements.txt
 ├── .env.example
+├── .streamlit/
+│   └── secrets_template.toml       # Secrets template (copy to secrets.toml)
 ├── src/
 │   ├── agents/
 │   │   ├── gsc_fetcher.py          # Agent 1: GSC data extraction
@@ -145,7 +168,7 @@ Supported formats: `.txt`, `.md`, `.pdf`, `.docx`, or a public Google Doc URL.
 
 Pages are ranked by an **opportunity score** that surfaces underperformers:
 
-```
+```text
 opportunity_score = impressions / (max(position, 1) × clicks + 1)
 ```
 
