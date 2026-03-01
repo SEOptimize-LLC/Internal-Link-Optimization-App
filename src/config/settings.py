@@ -13,8 +13,16 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 
 # AI Models
-MODEL_REASONING = os.getenv("MODEL_REASONING", "anthropic/claude-sonnet-4-5")
-MODEL_FAST = os.getenv("MODEL_FAST", "google/gemini-2.0-flash")
+MODEL_REASONING = os.getenv("MODEL_REASONING", "anthropic/claude-sonnet-4-6")
+MODEL_FAST = os.getenv("MODEL_FAST", "anthropic/claude-sonnet-4-6")
+
+AVAILABLE_MODELS = [
+    "anthropic/claude-sonnet-4-6",
+    "openai/gpt-5.2",
+    "google/gemini-3.1-pro-preview",
+    "google/gemini-3-flash-preview",
+    "x-ai/grok-4.1-fast",
+]
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")

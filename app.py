@@ -79,6 +79,7 @@ def _init_state():
         "gsc_credentials": None,   # OAuth credentials dict
         "oauth_state": None,       # CSRF state token
         "oauth_flow": None,        # Flow object — must persist for PKCE token exchange
+        "selected_model": "anthropic/claude-sonnet-4-6",
         "queries_df": None,
         "pages_df": None,
         "profile": None,
@@ -199,7 +200,14 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.caption("Models: Claude Sonnet (reasoning) + Gemini Flash (batching)")
+    from src.config.settings import AVAILABLE_MODELS
+    st.session_state.selected_model = st.selectbox(
+        "AI Model",
+        options=AVAILABLE_MODELS,
+        index=AVAILABLE_MODELS.index(st.session_state.selected_model)
+        if st.session_state.selected_model in AVAILABLE_MODELS else 0,
+        help="Model used for all AI analysis steps",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -398,6 +406,10 @@ elif st.session_state.step == "running":
             status_text.caption(detail)
 
     try:
+        import src.utils.openrouter as _openrouter
+        _openrouter.MODEL_REASONING = st.session_state.selected_model
+        _openrouter.MODEL_FAST = st.session_state.selected_model
+
         from src.utils.helpers import generate_run_id
         from src.utils.document_parser import parse_document
         from src.agents.gsc_fetcher import fetch_gsc_data
