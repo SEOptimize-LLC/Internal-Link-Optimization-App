@@ -31,6 +31,7 @@ def get_oauth_flow(client_id: str, client_secret: str, redirect_uri: str) -> Flo
         client_config,
         scopes=GSC_SCOPES,
         redirect_uri=redirect_uri,
+        autogenerate_code_verifier=False,  # disable PKCE — not needed for confidential web clients
     )
 
 
