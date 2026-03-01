@@ -233,10 +233,10 @@ if st.session_state.step == "setup":
                 auth_url, oauth_state = get_auth_url(client_id, client_secret, redirect_uri)
                 st.session_state.oauth_state = oauth_state  # Store for CSRF verification on callback
 
-                st.markdown(
-                    f'<div class="connect-btn"><a href="{auth_url}" target="_self">'
-                    f'Sign in with Google</a></div>',
-                    unsafe_allow_html=True,
+                st.link_button(
+                    "Sign in with Google",
+                    url=auth_url,
+                    use_container_width=True,
                 )
                 st.caption(
                     "You'll be redirected to Google's login page. "
