@@ -226,20 +226,15 @@ if st.session_state.step == "setup":
 
             try:
                 from src.agents.gsc_fetcher import get_auth_url
-                import secrets as _secrets
 
                 client_id, client_secret, redirect_uri = _get_oauth_config()
 
-                # Generate and store state token for CSRF protection
-                if not st.session_state.oauth_state:
-                    st.session_state.oauth_state = _secrets.token_urlsafe(16)
-
-                auth_url, _ = get_auth_url(client_id, client_secret, redirect_uri)
-                # Append our state token to the URL
-                auth_url_with_state = f"{auth_url}&state={st.session_state.oauth_state}"
+                # get_auth_url returns the URL with state already embedded
+                auth_url, oauth_state = get_auth_url(client_id, client_secret, redirect_uri)
+                st.session_state.oauth_state = oauth_state  # Store for CSRF verification on callback
 
                 st.markdown(
-                    f'<div class="connect-btn"><a href="{auth_url_with_state}" target="_self">'
+                    f'<div class="connect-btn"><a href="{auth_url}" target="_self">'
                     f'Sign in with Google</a></div>',
                     unsafe_allow_html=True,
                 )
