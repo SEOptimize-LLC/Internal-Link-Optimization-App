@@ -58,6 +58,32 @@ Rules:
 - Anchor text must be descriptive and relevant
 """
 
+ANCHOR_TEXT_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in contextual internal linking.
+
+For each source→target page pair, generate natural anchor text that:
+- Fits naturally into the source page's topic context
+- Accurately describes what the target page covers
+- Reads like a human writer would use it (not keyword-stuffed)
+- Is 3-7 words long
+
+Return a JSON object:
+{
+  "anchors": [
+    {
+      "source_url": "...",
+      "target_url": "...",
+      "anchor_text": "natural contextual anchor text here"
+    }
+  ]
+}
+
+Rules:
+- Never use generic phrases like "click here", "learn more", "read this", or "this article"
+- Anchor text must reflect the target page's specific topic
+- Consider the source page's topic so the phrasing flows naturally in context
+- One anchor suggestion per source→target pair
+"""
+
 
 def _generate_pillar_cluster_links(
     silo_structure: dict,
@@ -66,11 +92,12 @@ def _generate_pillar_cluster_links(
     """
     Generate bidirectional pillar ↔ cluster post links (Type 1 - P1 priority).
     These are structural necessities, generated deterministically without AI.
+    Anchor text is a placeholder (cluster label); enriched by _enrich_anchor_texts later.
     """
     recommendations = []
 
-    cluster_id_to_anchors: dict[str, list[str]] = {
-        cid: c.get("anchor_variants", []) for cid, c in clusters.items()
+    cluster_id_to_label: dict[str, str] = {
+        cid: c.get("label", "") for cid, c in clusters.items()
     }
 
     for silo_id, silo in silo_structure.items():
@@ -78,19 +105,18 @@ def _generate_pillar_cluster_links(
         cluster_posts = silo.get("cluster_post_urls", [])
         cluster_id = silo.get("cluster_id", "")
         silo_name = silo.get("silo_name", "")
-        anchor_variants = cluster_id_to_anchors.get(cluster_id, [])
+        cluster_label = cluster_id_to_label.get(cluster_id, silo_name)
 
         if not pillar_url or not cluster_posts:
             continue
 
-        for i, post_url in enumerate(cluster_posts):
-            # Cluster post → Pillar
-            anchor = anchor_variants[i % len(anchor_variants)] if anchor_variants else silo_name
+        for post_url in cluster_posts:
+            # Cluster post → Pillar (placeholder anchor; enriched later)
             recommendations.append({
                 "id": str(uuid.uuid4()),
                 "source_url": post_url,
                 "target_url": pillar_url,
-                "anchor_text": anchor,
+                "anchor_text": cluster_label,
                 "link_type": "cluster_to_pillar",
                 "priority": 1,
                 "reason": f"Cluster post links back to pillar page for '{silo_name}' SILO structure",
@@ -99,13 +125,12 @@ def _generate_pillar_cluster_links(
                 "implementation_status": "pending",
             })
 
-            # Pillar → Cluster post (use different anchor variant)
-            anchor_out = anchor_variants[(i + 1) % len(anchor_variants)] if anchor_variants else post_url
+            # Pillar → Cluster post (placeholder anchor; enriched later)
             recommendations.append({
                 "id": str(uuid.uuid4()),
                 "source_url": pillar_url,
                 "target_url": post_url,
-                "anchor_text": anchor_out,
+                "anchor_text": cluster_label,
                 "link_type": "pillar_to_cluster",
                 "priority": 1,
                 "reason": f"Pillar page links to cluster post to distribute authority within '{silo_name}' SILO",
@@ -133,7 +158,6 @@ def _generate_authority_boost_links(
         cluster_id = silo.get("cluster_id", "")
         silo_name = silo.get("silo_name", "")
         cluster = clusters.get(cluster_id, {})
-        anchor_variants = cluster.get("anchor_variants", [])
 
         # Get all pages in this cluster
         silo_urls = set(silo.get("cluster_post_urls", []) + ([silo.get("pillar_url")] if silo.get("pillar_url") else []))
@@ -149,8 +173,10 @@ def _generate_authority_boost_links(
         # Bottom 3 underperformers (highest opportunity score = most impression/position gap)
         top_opportunity = silo_pages[silo_pages["clicks"] < silo_pages["clicks"].median()].nlargest(3, "opportunity_score")
 
+        cluster_label = cluster.get("label", silo_name)
+
         for _, authority_row in top_authority.iterrows():
-            for j, (_, opportunity_row) in enumerate(top_opportunity.iterrows()):
+            for _, opportunity_row in top_opportunity.iterrows():
                 # Don't link a page to itself
                 if authority_row["url"] == opportunity_row["url"]:
                     continue
@@ -162,12 +188,11 @@ def _generate_authority_boost_links(
                 ):
                     continue
 
-                anchor = anchor_variants[j % len(anchor_variants)] if anchor_variants else silo_name
                 recommendations.append({
                     "id": str(uuid.uuid4()),
                     "source_url": authority_row["url"],
                     "target_url": opportunity_row["url"],
-                    "anchor_text": anchor,
+                    "anchor_text": cluster_label,
                     "link_type": "authority_boost",
                     "priority": 2,
                     "reason": (
@@ -347,6 +372,96 @@ def _generate_orphan_links(
     return recommendations
 
 
+def _enrich_anchor_texts(
+    recommendations: list[dict],
+    clusters: dict,
+    page_taxonomy_df: pd.DataFrame,
+    profile: BusinessProfile,
+    progress_callback: Callable[[str], None] = None,
+) -> list[dict]:
+    """
+    Replace placeholder anchor text on P1/P2 links with AI-generated contextual anchors.
+    Each source→target pair gets anchor text informed by both pages' cluster topics
+    and the business profile, so phrasing is specific and natural.
+    """
+    if not recommendations:
+        return recommendations
+
+    # Build URL → cluster_id lookup from taxonomy
+    url_to_cluster_id: dict[str, str] = {}
+    if not page_taxonomy_df.empty and "cluster_id" in page_taxonomy_df.columns:
+        for _, row in page_taxonomy_df.iterrows():
+            if row.get("cluster_id"):
+                url_to_cluster_id[row["url"]] = str(row["cluster_id"])
+
+    business_context = profile.to_context_string()
+    batches = chunk_list(recommendations, 25)
+    enriched: list[dict] = []
+
+    for i, batch in enumerate(batches):
+        if progress_callback:
+            progress_callback(f"Generating contextual anchor text: batch {i + 1}/{len(batches)}...")
+
+        pairs_text = []
+        for j, rec in enumerate(batch, 1):
+            src_cid = url_to_cluster_id.get(rec["source_url"], "")
+            tgt_cid = url_to_cluster_id.get(rec["target_url"], "")
+            src_cluster = clusters.get(src_cid, {})
+            tgt_cluster = clusters.get(tgt_cid, {})
+
+            src_label = src_cluster.get("label", rec.get("silo_name", ""))
+            tgt_label = tgt_cluster.get("label", rec.get("silo_name", ""))
+            src_queries = ", ".join(src_cluster.get("queries", [])[:3])
+            tgt_queries = ", ".join(tgt_cluster.get("queries", [])[:3])
+
+            src_context = f"{src_label}" + (f" (e.g. {src_queries})" if src_queries else "")
+            tgt_context = f"{tgt_label}" + (f" (e.g. {tgt_queries})" if tgt_queries else "")
+
+            pairs_text.append(
+                f"{j}. source_url: {rec['source_url']}\n"
+                f"   source_topic: {src_context}\n"
+                f"   target_url: {rec['target_url']}\n"
+                f"   target_topic: {tgt_context}"
+            )
+
+        messages = [
+            {"role": "system", "content": ANCHOR_TEXT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    f"Business context: {business_context}\n\n"
+                    f"Generate anchor text for {len(batch)} link pairs:\n\n"
+                    + "\n\n".join(pairs_text)
+                ),
+            },
+        ]
+
+        try:
+            result = chat_completion(
+                messages=messages,
+                use_fast_model=True,
+                response_format="json",
+                temperature=0.2,
+            )
+            anchor_map = {
+                (a["source_url"], a["target_url"]): a["anchor_text"]
+                for a in result.get("anchors", [])
+                if a.get("source_url") and a.get("target_url") and a.get("anchor_text")
+            }
+        except Exception as e:
+            logger.warning("Anchor text enrichment batch %d failed: %s", i + 1, e)
+            anchor_map = {}
+
+        for rec in batch:
+            key = (rec["source_url"], rec["target_url"])
+            if key in anchor_map:
+                rec = {**rec, "anchor_text": anchor_map[key]}
+            enriched.append(rec)
+
+    logger.info("Anchor text enrichment complete: %d links updated", len(enriched))
+    return enriched
+
+
 def generate_link_recommendations(
     silo_structure: dict,
     page_taxonomy_df: pd.DataFrame,
@@ -375,12 +490,16 @@ def generate_link_recommendations(
     all_recommendations = []
 
     _progress("Generating P1: Pillar ↔ Cluster bidirectional links...")
-    all_recommendations.extend(_generate_pillar_cluster_links(silo_structure, clusters))
+    p1_recs = _generate_pillar_cluster_links(silo_structure, clusters)
 
     _progress("Generating P2: Authority boost links...")
-    all_recommendations.extend(
-        _generate_authority_boost_links(page_taxonomy_df, silo_structure, clusters)
+    p2_recs = _generate_authority_boost_links(page_taxonomy_df, silo_structure, clusters)
+
+    _progress(f"Generating contextual anchor text for {len(p1_recs) + len(p2_recs)} P1/P2 links...")
+    enriched_recs = _enrich_anchor_texts(
+        p1_recs + p2_recs, clusters, page_taxonomy_df, profile, progress_callback
     )
+    all_recommendations.extend(enriched_recs)
 
     _progress("Generating P3: Blog → Money page connections...")
     all_recommendations.extend(

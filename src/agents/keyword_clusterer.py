@@ -5,7 +5,7 @@ from typing import Callable
 import pandas as pd
 
 from src.agents.profile_parser import BusinessProfile
-from src.config.settings import MAX_QUERIES_PER_CLUSTER_BATCH, MODEL_FAST, MODEL_REASONING
+from src.config.settings import MAX_QUERIES_PER_CLUSTER_BATCH
 from src.utils.helpers import chunk_list, deduplicate_queries
 from src.utils.openrouter import chat_completion
 
@@ -33,25 +33,6 @@ Rules:
 - Use the business context to inform groupings
 """
 
-LSI_EXPANSION_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in semantic SEO, LSI keywords, and NLP entity optimization.
-
-Given a keyword cluster and business context, generate:
-1. LSI (Latent Semantic Indexing) terms — semantically related phrases that reinforce topical authority
-2. NLP entities — named entities and key concepts relevant to the topic and business
-3. Anchor text variations — natural, contextual anchor text options for internal links
-
-Return a JSON object with this exact structure:
-{
-  "lsi_terms": ["term1", "term2", ...],
-  "entities": ["entity1", "entity2", ...],
-  "anchor_variants": ["anchor1", "anchor2", "anchor3"]
-}
-
-Rules:
-- lsi_terms: 5-10 semantically related phrases (not exact keywords, but related concepts)
-- entities: 3-5 named entities (people, tools, concepts, brands, locations relevant to this topic + business)
-- anchor_variants: exactly 3 anchor text options for internal links (natural language, varied length)
-"""
 
 
 def _cluster_batch(
@@ -84,35 +65,6 @@ def _cluster_batch(
     logger.debug("Batch %d: %d queries → %d clusters", batch_index, len(queries), len(clusters))
     return clusters
 
-
-def _expand_cluster_lsi(cluster_label: str, cluster_queries: list[str], business_context: str) -> dict:
-    """Generate LSI terms, entities, and anchor text for a cluster."""
-    sample_queries = cluster_queries[:10]
-
-    messages = [
-        {"role": "system", "content": LSI_EXPANSION_SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                f"Business context: {business_context}\n\n"
-                f"Cluster topic: {cluster_label}\n"
-                f"Sample queries: {', '.join(sample_queries)}"
-            ),
-        },
-    ]
-
-    result = chat_completion(
-        messages=messages,
-        model=MODEL_REASONING,
-        response_format="json",
-        temperature=0.2,
-    )
-
-    return {
-        "lsi_terms": result.get("lsi_terms", []),
-        "entities": result.get("entities", []),
-        "anchor_variants": result.get("anchor_variants", []),
-    }
 
 
 def _merge_cross_batch_clusters(all_batch_clusters: list[list[dict]]) -> list[dict]:
@@ -180,7 +132,7 @@ def cluster_keywords(
     progress_callback: Callable[[str], None] = None,
 ) -> dict:
     """
-    Cluster GSC queries into semantic topic groups and expand with LSI/NLP terms.
+    Cluster GSC queries into semantic topic groups.
 
     Args:
         queries_df: DataFrame with columns [query, page, clicks, impressions, ctr, position]
@@ -189,7 +141,7 @@ def cluster_keywords(
         progress_callback: Optional status update callback
 
     Returns:
-        clusters dict: {cluster_id: {label, intent, queries[], lsi_terms[], entities[], anchor_variants[], page_assignments[]}}
+        clusters dict: {cluster_id: {label, intent, queries[], page_assignments[], query_count}}
     """
     def _progress(msg: str):
         if progress_callback:
@@ -252,8 +204,7 @@ def cluster_keywords(
         if votes:
             page_cluster_votes[page] = votes
 
-    # --- LSI expansion ---
-    _progress("Expanding clusters with LSI terms and NLP entities...")
+    # --- Build final clusters ---
     final_clusters: dict[str, dict] = {}
 
     for i, cluster in enumerate(raw_clusters):
@@ -261,10 +212,6 @@ def cluster_keywords(
         label = cluster.get("label", f"Cluster {i + 1}")
         queries = cluster.get("queries", [])
         intent = cluster.get("intent", "informational")
-
-        _progress(f"Expanding cluster {i + 1}/{len(raw_clusters)}: {label}")
-
-        lsi_data = _expand_cluster_lsi(label, queries, business_context)
 
         # Identify pages assigned to this cluster
         assigned_pages = [
@@ -277,12 +224,9 @@ def cluster_keywords(
             "label": label,
             "intent": intent,
             "queries": queries,
-            "lsi_terms": lsi_data["lsi_terms"],
-            "entities": lsi_data["entities"],
-            "anchor_variants": lsi_data["anchor_variants"],
             "page_assignments": assigned_pages,
             "query_count": len(queries),
         }
 
-    _progress(f"Keyword clustering complete: {len(final_clusters)} clusters with LSI/NLP expansion")
+    _progress(f"Keyword clustering complete: {len(final_clusters)} topic clusters")
     return final_clusters
