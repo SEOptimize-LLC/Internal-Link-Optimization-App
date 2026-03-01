@@ -34,12 +34,14 @@ def get_oauth_flow(client_id: str, client_secret: str, redirect_uri: str) -> Flo
     )
 
 
-def get_auth_url(client_id: str, client_secret: str, redirect_uri: str) -> tuple[str, str]:
+def get_auth_url(client_id: str, client_secret: str, redirect_uri: str) -> tuple[str, str, "Flow"]:
     """
     Generate the Google OAuth authorization URL.
 
     Returns:
-        Tuple of (auth_url, state) — state is used for CSRF verification on callback.
+        Tuple of (auth_url, state, flow) — the flow object must be stored in
+        session state and passed back to exchange_code_for_credentials so the
+        PKCE code_verifier is available for the token exchange.
     """
     flow = get_oauth_flow(client_id, client_secret, redirect_uri)
     auth_url, state = flow.authorization_url(
@@ -47,22 +49,21 @@ def get_auth_url(client_id: str, client_secret: str, redirect_uri: str) -> tuple
         access_type="offline",
         include_granted_scopes="true",
     )
-    return auth_url, state
+    return auth_url, state, flow
 
 
 def exchange_code_for_credentials(
     code: str,
-    client_id: str,
-    client_secret: str,
-    redirect_uri: str,
+    flow: "Flow",
 ) -> dict:
     """
-    Exchange an OAuth authorization code for credentials.
+    Exchange an OAuth authorization code for credentials using the original flow.
+    The same flow instance that generated the auth URL must be passed here so
+    the PKCE code_verifier is intact.
 
     Returns:
         Credentials dict (serializable, suitable for st.session_state).
     """
-    flow = get_oauth_flow(client_id, client_secret, redirect_uri)
     flow.fetch_token(code=code)
     return save_credentials(flow.credentials)
 

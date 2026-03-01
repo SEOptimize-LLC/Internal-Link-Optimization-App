@@ -23,17 +23,15 @@ st.markdown(
     .main { background-color: #0f1117; }
     .stProgress > div > div { background-color: #f5a623; }
     div[data-testid="stMetric"] { background: #1e2130; border: 1px solid #2e3450; border-radius: 8px; padding: 12px; }
-    .connect-btn a {
-        display: inline-block;
-        background: #4285F4;
+    div[data-testid="stLinkButton"] a {
+        background: #4285F4 !important;
         color: white !important;
-        padding: 10px 24px;
-        border-radius: 6px;
-        font-weight: 600;
-        text-decoration: none !important;
-        font-size: 15px;
+        border: none !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        font-size: 15px !important;
     }
-    .connect-btn a:hover { background: #3367D6; }
+    div[data-testid="stLinkButton"] a:hover { background: #3367D6 !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -80,6 +78,7 @@ def _init_state():
         "gsc_property": "",
         "gsc_credentials": None,   # OAuth credentials dict
         "oauth_state": None,       # CSRF state token
+        "oauth_flow": None,        # Flow object — must persist for PKCE token exchange
         "queries_df": None,
         "pages_df": None,
         "profile": None,
@@ -116,11 +115,16 @@ if "code" in _query_params and st.session_state.gsc_credentials is None:
         st.stop()
 
     try:
-        from src.agents.gsc_fetcher import exchange_code_for_credentials
+        from src.agents.gsc_fetcher import exchange_code_for_credentials, get_oauth_flow
         client_id, client_secret, redirect_uri = _get_oauth_config()
 
+        # Reuse the stored flow so the PKCE code_verifier is available
+        flow = st.session_state.oauth_flow
+        if flow is None:
+            flow = get_oauth_flow(client_id, client_secret, redirect_uri)
+
         with st.spinner("Completing Google sign-in..."):
-            creds = exchange_code_for_credentials(_code, client_id, client_secret, redirect_uri)
+            creds = exchange_code_for_credentials(_code, flow)
 
         st.session_state.gsc_credentials = creds
         st.session_state.oauth_state = None
@@ -229,9 +233,10 @@ if st.session_state.step == "setup":
 
                 client_id, client_secret, redirect_uri = _get_oauth_config()
 
-                # get_auth_url returns the URL with state already embedded
-                auth_url, oauth_state = get_auth_url(client_id, client_secret, redirect_uri)
-                st.session_state.oauth_state = oauth_state  # Store for CSRF verification on callback
+                # get_auth_url returns the URL with state + flow (flow holds PKCE verifier)
+                auth_url, oauth_state, oauth_flow = get_auth_url(client_id, client_secret, redirect_uri)
+                st.session_state.oauth_state = oauth_state
+                st.session_state.oauth_flow = oauth_flow
 
                 st.link_button(
                     "Sign in with Google",
