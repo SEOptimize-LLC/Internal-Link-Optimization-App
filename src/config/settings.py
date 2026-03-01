@@ -3,8 +3,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Google Search Console
-GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
+# Google Search Console — OAuth2
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+GOOGLE_OAUTH_REDIRECT_URI = os.getenv("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:8501")
 
 # OpenRouter
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")

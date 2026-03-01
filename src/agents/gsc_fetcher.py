@@ -3,7 +3,9 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 import pandas as pd
-from google.oauth2 import service_account
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 from src.config.settings import GSC_SCOPES, GSC_PAGE_SIZE
@@ -12,21 +14,115 @@ from src.utils.helpers import compute_opportunity_score, normalize_url
 logger = logging.getLogger(__name__)
 
 
-def build_service(service_account_json_path: str):
-    """Build authenticated GSC service from service account JSON file."""
-    credentials = service_account.Credentials.from_service_account_file(
-        service_account_json_path,
+# ── OAuth helpers ─────────────────────────────────────────────────────────────
+
+def get_oauth_flow(client_id: str, client_secret: str, redirect_uri: str) -> Flow:
+    """Create an OAuth2 Flow object from credentials."""
+    client_config = {
+        "web": {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uris": [redirect_uri],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://accounts.google.com/o/oauth2/token",
+        }
+    }
+    return Flow.from_client_config(
+        client_config,
         scopes=GSC_SCOPES,
+        redirect_uri=redirect_uri,
     )
-    return build("searchconsole", "v1", credentials=credentials)
 
 
-def list_properties(service_account_json_path: str) -> list[str]:
+def get_auth_url(client_id: str, client_secret: str, redirect_uri: str) -> tuple[str, str]:
     """
-    List all GSC properties accessible by this service account.
+    Generate the Google OAuth authorization URL.
+
+    Returns:
+        Tuple of (auth_url, state) — state is used for CSRF verification on callback.
+    """
+    flow = get_oauth_flow(client_id, client_secret, redirect_uri)
+    auth_url, state = flow.authorization_url(
+        prompt="consent",
+        access_type="offline",
+        include_granted_scopes="true",
+    )
+    return auth_url, state
+
+
+def exchange_code_for_credentials(
+    code: str,
+    client_id: str,
+    client_secret: str,
+    redirect_uri: str,
+) -> dict:
+    """
+    Exchange an OAuth authorization code for credentials.
+
+    Returns:
+        Credentials dict (serializable, suitable for st.session_state).
+    """
+    flow = get_oauth_flow(client_id, client_secret, redirect_uri)
+    flow.fetch_token(code=code)
+    return save_credentials(flow.credentials)
+
+
+def save_credentials(credentials: Credentials) -> dict:
+    """Serialize a Credentials object to a JSON-safe dict for session storage."""
+    return {
+        "token": credentials.token,
+        "refresh_token": credentials.refresh_token,
+        "token_uri": credentials.token_uri,
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+        "scopes": list(credentials.scopes) if credentials.scopes else GSC_SCOPES,
+    }
+
+
+def load_credentials(credentials_dict: dict) -> Credentials | None:
+    """
+    Reconstruct a Credentials object from a stored dict.
+    Automatically refreshes if expired.
+
+    Returns:
+        Valid Credentials object, or None if refresh failed.
+    """
+    credentials = Credentials(
+        token=credentials_dict.get("token"),
+        refresh_token=credentials_dict.get("refresh_token"),
+        token_uri=credentials_dict.get("token_uri", "https://accounts.google.com/o/oauth2/token"),
+        client_id=credentials_dict.get("client_id"),
+        client_secret=credentials_dict.get("client_secret"),
+        scopes=credentials_dict.get("scopes", GSC_SCOPES),
+    )
+
+    if credentials.expired and credentials.refresh_token:
+        try:
+            credentials.refresh(Request())
+            logger.info("GSC credentials refreshed successfully")
+        except Exception as e:
+            logger.warning("Failed to refresh GSC credentials: %s", e)
+            return None
+
+    return credentials
+
+
+def build_service_from_credentials(credentials_dict: dict):
+    """Build an authenticated GSC service from a stored credentials dict."""
+    credentials = load_credentials(credentials_dict)
+    if credentials is None:
+        raise ValueError("GSC credentials are expired or invalid. Please reconnect with Google.")
+    return build("searchconsole", "v1", credentials=credentials, cache_discovery=False)
+
+
+# ── GSC data functions ────────────────────────────────────────────────────────
+
+def list_properties(credentials_dict: dict) -> list[str]:
+    """
+    List all GSC properties accessible by these OAuth credentials.
     Returns sorted list of property URLs.
     """
-    service = build_service(service_account_json_path)
+    service = build_service_from_credentials(credentials_dict)
     result = service.sites().list().execute()
     sites = result.get("siteEntry", [])
     return sorted([s["siteUrl"] for s in sites])
@@ -72,7 +168,7 @@ def _fetch_paginated(
 
 
 def fetch_gsc_data(
-    service_account_json_path: str,
+    credentials_dict: dict,
     site_url: str,
     days_back: int = 90,
     filter_branded: bool = False,
@@ -83,7 +179,7 @@ def fetch_gsc_data(
     Fetch GSC search analytics data for a property.
 
     Args:
-        service_account_json_path: Path to service account JSON
+        credentials_dict: OAuth credentials dict (from session state)
         site_url: GSC property URL (e.g., https://example.com/)
         days_back: Number of days of data to fetch
         filter_branded: If True, remove queries containing brand_name
@@ -102,7 +198,7 @@ def fetch_gsc_data(
     start_date = (datetime.now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
 
     _progress(f"Connecting to GSC for {site_url}")
-    service = build_service(service_account_json_path)
+    service = build_service_from_credentials(credentials_dict)
 
     # --- Query + Page level data ---
     _progress(f"Fetching query+page data ({start_date} to {end_date})...")

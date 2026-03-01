@@ -3,10 +3,8 @@
 *.json
 !.env.example
 
-# Service account keys (never commit)
-*service-account*.json
-*credentials*.json
-*key*.json
+# Streamlit secrets (never commit — use secrets_template.toml as reference)
+.streamlit/secrets.toml
 
 # Python
 __pycache__/

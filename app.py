@@ -1,8 +1,5 @@
-import io
-import json
 import logging
 import os
-import tempfile
 from datetime import datetime
 
 import pandas as pd
@@ -19,27 +16,70 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ── Styling ──────────────────────────────────────────────────────────────────
+# ── Styling ───────────────────────────────────────────────────────────────────
 st.markdown(
     """
     <style>
     .main { background-color: #0f1117; }
     .stProgress > div > div { background-color: #f5a623; }
-    .metric-card { background: #1e2130; border: 1px solid #2e3450; border-radius: 8px; padding: 16px; }
     div[data-testid="stMetric"] { background: #1e2130; border: 1px solid #2e3450; border-radius: 8px; padding: 12px; }
+    .connect-btn a {
+        display: inline-block;
+        background: #4285F4;
+        color: white !important;
+        padding: 10px 24px;
+        border-radius: 6px;
+        font-weight: 600;
+        text-decoration: none !important;
+        font-size: 15px;
+    }
+    .connect-btn a:hover { background: #3367D6; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
+# ── OAuth config helper ───────────────────────────────────────────────────────
+def _get_oauth_config() -> tuple[str, str, str]:
+    """
+    Load OAuth credentials from st.secrets (preferred) or environment variables.
+    Returns (client_id, client_secret, redirect_uri).
+    """
+    try:
+        client_id = st.secrets["google"]["client_id"]
+        client_secret = st.secrets["google"]["client_secret"]
+        redirect_uri = st.secrets["google"]["redirect_uri"]
+    except (KeyError, AttributeError):
+        from src.config.settings import (
+            GOOGLE_OAUTH_CLIENT_ID,
+            GOOGLE_OAUTH_CLIENT_SECRET,
+            GOOGLE_OAUTH_REDIRECT_URI,
+        )
+        client_id = GOOGLE_OAUTH_CLIENT_ID
+        client_secret = GOOGLE_OAUTH_CLIENT_SECRET
+        redirect_uri = GOOGLE_OAUTH_REDIRECT_URI
+
+    if not client_id or not client_secret:
+        st.error(
+            "Google OAuth credentials are not configured. "
+            "Add them to `.streamlit/secrets.toml` or your `.env` file. "
+            "See the README for setup instructions."
+        )
+        st.stop()
+
+    return client_id, client_secret, redirect_uri
+
+
 # ── Session state initialization ──────────────────────────────────────────────
 def _init_state():
     defaults = {
-        "step": "setup",          # setup | running | results
+        "step": "setup",
         "run_id": None,
         "client_name": "",
         "gsc_property": "",
+        "gsc_credentials": None,   # OAuth credentials dict
+        "oauth_state": None,       # CSRF state token
         "queries_df": None,
         "pages_df": None,
         "profile": None,
@@ -60,6 +100,39 @@ def _init_state():
 _init_state()
 
 
+# ── OAuth callback handler ─────────────────────────────────────────────────────
+# Must run before any page rendering to catch the redirect code
+_query_params = st.query_params.to_dict()
+
+if "code" in _query_params and st.session_state.gsc_credentials is None:
+    _code = _query_params["code"]
+    _state = _query_params.get("state", "")
+
+    # Verify CSRF state
+    _expected_state = st.session_state.oauth_state or ""
+    if _expected_state and _state != _expected_state:
+        st.error("OAuth state mismatch — possible CSRF attempt. Please try connecting again.")
+        st.query_params.clear()
+        st.stop()
+
+    try:
+        from src.agents.gsc_fetcher import exchange_code_for_credentials
+        client_id, client_secret, redirect_uri = _get_oauth_config()
+
+        with st.spinner("Completing Google sign-in..."):
+            creds = exchange_code_for_credentials(_code, client_id, client_secret, redirect_uri)
+
+        st.session_state.gsc_credentials = creds
+        st.session_state.oauth_state = None
+        st.query_params.clear()
+        st.rerun()
+
+    except Exception as _e:
+        st.error(f"Google sign-in failed: {_e}\n\nPlease try again.")
+        st.query_params.clear()
+        st.stop()
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def _reset():
     for key in list(st.session_state.keys()):
@@ -67,15 +140,26 @@ def _reset():
     _init_state()
 
 
-def _progress_container():
-    """Return a status container for live progress updates."""
-    return st.empty()
+def _disconnect_gsc():
+    st.session_state.gsc_credentials = None
+    st.session_state.oauth_state = None
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("🔗 Internal Link Optimizer")
     st.caption("SILO-based internal linking strategy powered by GSC data + AI")
+
+    st.divider()
+
+    # GSC connection status
+    if st.session_state.gsc_credentials:
+        st.success("Google Search Console connected")
+        if st.button("Disconnect GSC", use_container_width=True):
+            _disconnect_gsc()
+            st.rerun()
+    else:
+        st.warning("GSC not connected")
 
     st.divider()
 
@@ -133,33 +217,71 @@ if st.session_state.step == "setup":
             help="Used for naming output files and Supabase records",
         )
 
-        st.subheader("2. GSC Authentication")
-        sa_upload = st.file_uploader(
-            "Upload Service Account JSON",
-            type=["json"],
-            help="Your Google service account key file with GSC read access",
-        )
+        # ── GSC Authentication ────────────────────────────────────────────────
+        st.subheader("2. Google Search Console")
 
-        gsc_properties = []
-        selected_property = ""
+        if st.session_state.gsc_credentials is None:
+            # Not connected — show sign-in button
+            st.markdown("Connect your Google account to access GSC properties.")
 
-        if sa_upload:
             try:
-                # Write to temp file to use with Google API
-                with tempfile.NamedTemporaryFile(mode="wb", suffix=".json", delete=False) as tmp:
-                    tmp.write(sa_upload.read())
-                    st.session_state["_sa_tmp_path"] = tmp.name
+                from src.agents.gsc_fetcher import get_auth_url
+                import secrets as _secrets
 
+                client_id, client_secret, redirect_uri = _get_oauth_config()
+
+                # Generate and store state token for CSRF protection
+                if not st.session_state.oauth_state:
+                    st.session_state.oauth_state = _secrets.token_urlsafe(16)
+
+                auth_url, _ = get_auth_url(client_id, client_secret, redirect_uri)
+                # Append our state token to the URL
+                auth_url_with_state = f"{auth_url}&state={st.session_state.oauth_state}"
+
+                st.markdown(
+                    f'<div class="connect-btn"><a href="{auth_url_with_state}" target="_self">'
+                    f'Sign in with Google</a></div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(
+                    "You'll be redirected to Google's login page. "
+                    "Grant read-only access to Search Console."
+                )
+
+            except Exception as e:
+                st.error(f"Could not generate sign-in link: {e}")
+
+            selected_property = ""
+
+        else:
+            # Connected — show property selector
+            st.success("Connected to Google Search Console")
+
+            try:
                 from src.agents.gsc_fetcher import list_properties
-                with st.spinner("Loading GSC properties..."):
-                    gsc_properties = list_properties(st.session_state["_sa_tmp_path"])
+                with st.spinner("Loading your GSC properties..."):
+                    gsc_properties = list_properties(st.session_state.gsc_credentials)
 
                 if gsc_properties:
-                    selected_property = st.selectbox("Select GSC Property", gsc_properties)
+                    selected_property = st.selectbox(
+                        "Select property to analyze",
+                        options=gsc_properties,
+                        help="Choose the GSC property (website) you want to optimize",
+                    )
                 else:
-                    st.warning("No GSC properties found for this service account.")
+                    st.warning(
+                        "No GSC properties found for this account. "
+                        "Make sure you have at least Restricted access in Google Search Console."
+                    )
+                    selected_property = ""
+
             except Exception as e:
-                st.error(f"Failed to authenticate with GSC: {e}")
+                st.error(f"Failed to load properties: {e}")
+                if "expired" in str(e).lower() or "invalid" in str(e).lower():
+                    st.info("Your session may have expired. Try disconnecting and reconnecting.")
+                selected_property = ""
+
+        st.divider()
 
         date_range = st.slider(
             "Data Range (days back)",
@@ -213,19 +335,19 @@ if st.session_state.step == "setup":
 
     # Validate and run
     can_run = bool(
-        client_name and
-        sa_upload and
-        selected_property and
-        (profile_bytes or profile_url)
+        client_name
+        and st.session_state.gsc_credentials
+        and selected_property
+        and (profile_bytes or profile_url)
     )
 
     if not can_run:
         missing = []
         if not client_name:
             missing.append("client name")
-        if not sa_upload:
-            missing.append("service account JSON")
-        if sa_upload and not selected_property:
+        if not st.session_state.gsc_credentials:
+            missing.append("Google sign-in")
+        elif not selected_property:
             missing.append("GSC property selection")
         if not (profile_bytes or profile_url):
             missing.append("business profile")
@@ -252,15 +374,7 @@ elif st.session_state.step == "running":
     progress_bar = st.progress(0)
     status_text = st.empty()
 
-    step_indicators = {
-        1: st.empty(),
-        2: st.empty(),
-        3: st.empty(),
-        4: st.empty(),
-        5: st.empty(),
-        6: st.empty(),
-    }
-
+    step_indicators = {i: st.empty() for i in range(1, 7)}
     step_names = {
         1: "Fetching GSC Data",
         2: "Parsing Business Profile",
@@ -304,15 +418,12 @@ elif st.session_state.step == "running":
         # ── Step 1: GSC Data ──────────────────────────────────────────────────
         update_step(1, "running")
 
-        def gsc_progress(msg):
-            status_text.caption(msg)
-
         queries_df, pages_df = fetch_gsc_data(
-            service_account_json_path=st.session_state["_sa_tmp_path"],
+            credentials_dict=st.session_state.gsc_credentials,
             site_url=st.session_state.gsc_property,
             days_back=st.session_state._date_range,
             filter_branded=st.session_state._filter_branded,
-            progress_callback=gsc_progress,
+            progress_callback=lambda msg: status_text.caption(msg),
         )
         st.session_state.queries_df = queries_df
         st.session_state.pages_df = pages_df
@@ -333,14 +444,11 @@ elif st.session_state.step == "running":
         # ── Step 3: Keyword Clustering ────────────────────────────────────────
         update_step(3, "running")
 
-        def cluster_progress(msg):
-            status_text.caption(msg)
-
         clusters = cluster_keywords(
             queries_df=queries_df,
             profile=profile,
             pages_df=pages_df,
-            progress_callback=cluster_progress,
+            progress_callback=lambda msg: status_text.caption(msg),
         )
         st.session_state.clusters = clusters
         update_step(3, "done", f"{len(clusters)} clusters identified")
@@ -348,14 +456,11 @@ elif st.session_state.step == "running":
         # ── Step 4: Content Categorization ───────────────────────────────────
         update_step(4, "running")
 
-        def cat_progress(msg):
-            status_text.caption(msg)
-
         page_taxonomy_df, silo_structure = categorize_content(
             pages_df=pages_df,
             profile=profile,
             clusters=clusters,
-            progress_callback=cat_progress,
+            progress_callback=lambda msg: status_text.caption(msg),
         )
         st.session_state.page_taxonomy_df = page_taxonomy_df
         st.session_state.silo_structure = silo_structure
@@ -364,15 +469,12 @@ elif st.session_state.step == "running":
         # ── Step 5: Link Recommendations ─────────────────────────────────────
         update_step(5, "running")
 
-        def rec_progress(msg):
-            status_text.caption(msg)
-
         recommendations_df = generate_link_recommendations(
             silo_structure=silo_structure,
             page_taxonomy_df=page_taxonomy_df,
             clusters=clusters,
             profile=profile,
-            progress_callback=rec_progress,
+            progress_callback=lambda msg: status_text.caption(msg),
         )
         st.session_state.recommendations_df = recommendations_df
         total_recs = len(recommendations_df) if not recommendations_df.empty else 0
@@ -380,9 +482,8 @@ elif st.session_state.step == "running":
 
         # ── Step 6: Outputs ───────────────────────────────────────────────────
         update_step(6, "running", "Building SILO diagram...")
-        status_text.caption("Building SILO diagram...")
 
-        silo_fig, html_diagram_path = build_silo_diagram(
+        silo_fig, _ = build_silo_diagram(
             page_taxonomy_df=page_taxonomy_df,
             recommendations_df=recommendations_df,
             silo_structure=silo_structure,
@@ -433,10 +534,6 @@ elif st.session_state.step == "running":
 
     except Exception as e:
         logger.exception("Analysis failed")
-        for i in range(1, 7):
-            if "running" in step_indicators[i]._html:
-                update_step(i, "error", str(e))
-                break
         st.error(f"Analysis failed: {e}")
         st.session_state.error = str(e)
         if st.button("Back to Setup"):
@@ -452,7 +549,6 @@ elif st.session_state.step == "results":
     recommendations_df = st.session_state.recommendations_df
     clusters = st.session_state.clusters
     silo_structure = st.session_state.silo_structure
-    profile = st.session_state.profile
 
     st.title(f"Results: {st.session_state.client_name}")
     st.caption(f"Property: {st.session_state.gsc_property} · Run ID: {st.session_state.run_id}")
@@ -468,23 +564,23 @@ elif st.session_state.step == "results":
     col1.metric("Total Pages", len(page_taxonomy_df) if page_taxonomy_df is not None else 0)
     col2.metric("Clusters", len(clusters) if clusters else 0)
     col3.metric("SILOs", len(silo_structure) if silo_structure else 0)
-    col4.metric("P1 Critical", p1, delta=None, help="Pillar ↔ Cluster structural links")
-    col5.metric("P2 Authority", p2, delta=None, help="Authority boost links")
-    col6.metric("P3 Recommended", p3, delta=None, help="Blog→money + orphan fixes")
-    col7.metric("Orphans", type_counts.get("orphan_candidate", 0), delta=None, help="Pages needing integration")
+    col4.metric("P1 Critical", p1, help="Pillar ↔ Cluster structural links")
+    col5.metric("P2 Authority", p2, help="Authority boost links")
+    col6.metric("P3 Recommended", p3, help="Blog→money + orphan fixes")
+    col7.metric("Orphans", type_counts.get("orphan_candidate", 0), help="Pages needing integration")
 
     st.divider()
 
-    # ── SILO Diagram ─────────────────────────────────────────────────────────
+    # ── SILO Diagram ──────────────────────────────────────────────────────────
     st.subheader("SILO Architecture Diagram")
-    st.caption("Nodes: Gold=Pillar · Blue=Cluster Post · Green=Money · Red=Orphan · Edge thickness = Priority")
+    st.caption("Gold=Pillar · Blue=Cluster Post · Green=Money · Red=Orphan · Edge thickness = Priority")
 
     if st.session_state.silo_fig is not None:
         st.plotly_chart(st.session_state.silo_fig, use_container_width=True)
 
     st.divider()
 
-    # ── Tabs ─────────────────────────────────────────────────────────────────
+    # ── Tabs ──────────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
         "Link Recommendations",
         "Page Taxonomy",
@@ -492,7 +588,6 @@ elif st.session_state.step == "results":
         "Per-Page Report",
     ])
 
-    # Tab 1: Link Recommendations
     with tab1:
         st.subheader(f"All Link Recommendations ({total_recs})")
 
@@ -500,9 +595,7 @@ elif st.session_state.step == "results":
             col_f1, col_f2, col_f3 = st.columns(3)
             with col_f1:
                 priority_filter = st.multiselect(
-                    "Filter by Priority",
-                    options=[1, 2, 3],
-                    default=[1, 2, 3],
+                    "Filter by Priority", options=[1, 2, 3], default=[1, 2, 3],
                     format_func=lambda x: f"P{x}",
                 )
             with col_f2:
@@ -524,16 +617,10 @@ elif st.session_state.step == "results":
 
             display_cols = ["priority", "source_url", "target_url", "anchor_text", "link_type", "silo_name", "reason"]
             display_cols = [c for c in display_cols if c in filtered.columns]
-
-            st.dataframe(
-                filtered[display_cols].rename(columns={"priority": "P"}),
-                use_container_width=True,
-                height=500,
-            )
+            st.dataframe(filtered[display_cols].rename(columns={"priority": "P"}), use_container_width=True, height=500)
         else:
             st.info("No recommendations generated.")
 
-    # Tab 2: Page Taxonomy
     with tab2:
         st.subheader("Page Classification & SILO Membership")
 
@@ -544,27 +631,18 @@ elif st.session_state.step == "results":
                 default=page_taxonomy_df["page_type"].unique().tolist(),
             )
             filtered_tax = page_taxonomy_df[page_taxonomy_df["page_type"].isin(type_filter_tax)]
-
             display_cols = ["url", "page_type", "cluster_label", "clicks", "impressions", "opportunity_score"]
             display_cols = [c for c in display_cols if c in filtered_tax.columns]
-
-            st.dataframe(
-                filtered_tax[display_cols].sort_values("clicks", ascending=False),
-                use_container_width=True,
-                height=500,
-            )
+            st.dataframe(filtered_tax[display_cols].sort_values("clicks", ascending=False), use_container_width=True, height=500)
         else:
             st.info("No page taxonomy data available.")
 
-    # Tab 3: Keyword Clusters
     with tab3:
         st.subheader(f"Keyword Clusters ({len(clusters) if clusters else 0})")
 
         if clusters:
             for cluster_id, cluster in clusters.items():
-                with st.expander(
-                    f"{cluster['label']} ({cluster['intent']}) — {cluster['query_count']} queries"
-                ):
+                with st.expander(f"{cluster['label']} ({cluster['intent']}) — {cluster['query_count']} queries"):
                     col_a, col_b, col_c = st.columns(3)
                     with col_a:
                         st.markdown("**LSI Terms**")
@@ -578,20 +656,17 @@ elif st.session_state.step == "results":
                         st.markdown("**Anchor Variants**")
                         for anchor in cluster.get("anchor_variants", []):
                             st.caption(f'"{anchor}"')
-
                     if cluster.get("queries"):
                         st.markdown("**Sample Queries**")
                         st.caption(", ".join(cluster["queries"][:10]))
         else:
             st.info("No cluster data available.")
 
-    # Tab 4: Per-Page Report
     with tab4:
         st.subheader("Per-Page Internal Link Plan")
 
         if page_taxonomy_df is not None and not page_taxonomy_df.empty:
-            all_urls = page_taxonomy_df["url"].tolist()
-            selected_url = st.selectbox("Select a page", options=all_urls)
+            selected_url = st.selectbox("Select a page", options=page_taxonomy_df["url"].tolist())
 
             if selected_url:
                 row = page_taxonomy_df[page_taxonomy_df["url"] == selected_url].iloc[0]
@@ -615,7 +690,6 @@ elif st.session_state.step == "results":
                     outgoing = recommendations_df[recommendations_df["source_url"] == selected_url]
 
                     col_in, col_out = st.columns(2)
-
                     with col_in:
                         st.markdown(f"**Incoming Links ({len(incoming)})**")
                         st.caption("Pages that should link TO this page")
