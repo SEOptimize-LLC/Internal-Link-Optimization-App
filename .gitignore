@@ -1,0 +1,36 @@
+# Environment
+.env
+*.json
+!.env.example
+
+# Service account keys (never commit)
+*service-account*.json
+*credentials*.json
+*key*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Outputs (local exports, not committed)
+outputs/*
+!outputs/.gitkeep
+
+# Streamlit
+.streamlit/secrets.toml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.idea/

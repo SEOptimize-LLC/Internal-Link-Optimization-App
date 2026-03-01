@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Internal Link Report — {{ summary.client_name }}</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1e2130;
+      --surface2: #262b3e;
+      --border: #2e3450;
+      --text: #e0e4f0;
+      --text-muted: #8892b0;
+      --gold: #f5a623;
+      --blue: #4a90d9;
+      --green: #27ae60;
+      --red: #e74c3c;
+      --orange: #f39c12;
+      --gray: #95a5a6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
+    a { color: var(--blue); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* Layout */
+    .container { max-width: 1200px; margin: 0 auto; padding: 24px; }
+    .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 20px 24px; margin-bottom: 24px; }
+    .header h1 { font-size: 22px; color: var(--gold); }
+    .header .meta { color: var(--text-muted); font-size: 13px; margin-top: 4px; }
+
+    /* Summary cards */
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+    .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; text-align: center; }
+    .stat-card .value { font-size: 28px; font-weight: 700; }
+    .stat-card .label { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+    .stat-card.p1 .value { color: var(--red); }
+    .stat-card.p2 .value { color: var(--orange); }
+    .stat-card.p3 .value { color: var(--gray); }
+    .stat-card.total .value { color: var(--blue); }
+    .stat-card.orphan .value { color: var(--red); }
+
+    /* Section headers */
+    .section-title { font-size: 18px; font-weight: 600; color: var(--gold); margin: 24px 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .subsection-title { font-size: 15px; font-weight: 600; color: var(--text); margin: 16px 0 8px; }
+
+    /* Type legend */
+    .type-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+    .type-badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .type-badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+    /* Page cards */
+    .page-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+    .page-card-header { padding: 12px 16px; display: flex; align-items: flex-start; justify-content: space-between; cursor: pointer; }
+    .page-card-header:hover { background: var(--surface2); }
+    .page-url { font-family: monospace; font-size: 13px; word-break: break-all; }
+    .page-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-pillar { background: rgba(245,166,35,0.15); color: var(--gold); }
+    .badge-cluster_post { background: rgba(74,144,217,0.15); color: var(--blue); }
+    .badge-money_page { background: rgba(39,174,96,0.15); color: var(--green); }
+    .badge-orphan_candidate { background: rgba(231,76,60,0.15); color: var(--red); }
+    .badge-p1 { background: rgba(231,76,60,0.15); color: var(--red); }
+    .badge-p2 { background: rgba(243,156,18,0.15); color: var(--orange); }
+    .badge-p3 { background: rgba(149,165,166,0.15); color: var(--gray); }
+
+    .page-card-body { padding: 12px 16px; border-top: 1px solid var(--border); display: none; }
+    .page-card.expanded .page-card-body { display: block; }
+    .page-card.expanded .page-card-header { background: var(--surface2); }
+
+    /* Link tables */
+    .link-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+    .link-table th { background: var(--surface2); padding: 8px 10px; text-align: left; font-size: 11px; text-transform: uppercase; color: var(--text-muted); }
+    .link-table td { padding: 8px 10px; border-top: 1px solid var(--border); vertical-align: top; }
+    .link-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .anchor-text { font-style: italic; color: var(--green); }
+    .reason-text { color: var(--text-muted); font-size: 12px; }
+
+    /* Clusters section */
+    .cluster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+    .cluster-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .cluster-label { font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+    .cluster-intent { font-size: 11px; text-transform: uppercase; color: var(--text-muted); margin-bottom: 8px; }
+    .tag-list { display: flex; flex-wrap: wrap; gap: 4px; }
+    .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 11px; color: var(--text-muted); }
+
+    /* SILO section */
+    .silo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+    .silo-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+    .silo-name { font-weight: 700; color: var(--gold); margin-bottom: 8px; }
+    .silo-pillar { font-family: monospace; font-size: 12px; color: var(--blue); margin-bottom: 6px; }
+    .silo-stat { font-size: 12px; color: var(--text-muted); }
+
+    /* Sticky nav */
+    .sticky-nav { position: sticky; top: 0; background: var(--bg); border-bottom: 1px solid var(--border); padding: 8px 0; z-index: 100; margin-bottom: 16px; }
+    .nav-links { display: flex; gap: 16px; flex-wrap: wrap; }
+    .nav-links a { color: var(--text-muted); font-size: 13px; }
+    .nav-links a:hover { color: var(--gold); }
+
+    /* Money page highlight */
+    .money-highlight { background: rgba(39,174,96,0.08); border: 1px solid rgba(39,174,96,0.2); border-radius: 6px; padding: 10px 12px; margin-top: 10px; }
+    .money-highlight .money-label { font-size: 11px; text-transform: uppercase; color: var(--green); font-weight: 600; margin-bottom: 4px; }
+
+    /* Controls */
+    .controls { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+    .btn { padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); cursor: pointer; font-size: 13px; }
+    .btn:hover { border-color: var(--gold); color: var(--gold); }
+
+    .no-data { color: var(--text-muted); font-size: 13px; font-style: italic; padding: 8px 0; }
+    .gap-warning { background: rgba(231,76,60,0.1); border: 1px solid rgba(231,76,60,0.3); border-radius: 6px; padding: 8px 12px; font-size: 12px; color: var(--red); margin-top: 8px; }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Internal Link Optimization Report</h1>
+  <div class="meta">
+    Client: <strong>{{ summary.client_name }}</strong> &nbsp;|&nbsp;
+    Property: <strong>{{ summary.gsc_property }}</strong> &nbsp;|&nbsp;
+    Generated: <strong>{{ summary.run_date }}</strong>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- Sticky Nav -->
+  <nav class="sticky-nav">
+    <div class="nav-links">
+      <a href="#summary">Summary</a>
+      <a href="#silos">SILO Structure</a>
+      <a href="#pages">Page Reports</a>
+      <a href="#clusters">Keyword Clusters</a>
+    </div>
+  </nav>
+
+  <!-- Summary -->
+  <div id="summary">
+    <div class="section-title">Summary</div>
+    <div class="summary-grid">
+      <div class="stat-card total"><div class="value">{{ summary.total_pages }}</div><div class="label">Total Pages</div></div>
+      <div class="stat-card"><div class="value" style="color:var(--gold)">{{ summary.total_clusters }}</div><div class="label">Topic Clusters</div></div>
+      <div class="stat-card"><div class="value" style="color:var(--blue)">{{ summary.total_silos }}</div><div class="label">SILOs</div></div>
+      <div class="stat-card p1"><div class="value">{{ summary.p1_count }}</div><div class="label">P1 Critical Links</div></div>
+      <div class="stat-card p2"><div class="value">{{ summary.p2_count }}</div><div class="label">P2 Authority Boosts</div></div>
+      <div class="stat-card p3"><div class="value">{{ summary.p3_count }}</div><div class="label">P3 Recommended</div></div>
+      <div class="stat-card orphan"><div class="value">{{ summary.orphan_count }}</div><div class="label">Orphan Pages</div></div>
+    </div>
+
+    <div class="type-legend">
+      <span class="type-badge"><span class="dot" style="background:var(--gold)"></span>Pillar ({{ summary.type_counts.get('pillar', 0) }})</span>
+      <span class="type-badge"><span class="dot" style="background:var(--blue)"></span>Cluster Post ({{ summary.type_counts.get('cluster_post', 0) }})</span>
+      <span class="type-badge"><span class="dot" style="background:var(--green)"></span>Money Page ({{ summary.type_counts.get('money_page', 0) }})</span>
+      <span class="type-badge"><span class="dot" style="background:var(--red)"></span>Orphan ({{ summary.type_counts.get('orphan_candidate', 0) }})</span>
+    </div>
+  </div>
+
+  <!-- SILO Structure -->
+  <div id="silos">
+    <div class="section-title">SILO Structure ({{ silo_structure|length }} SILOs)</div>
+    <div class="silo-grid">
+      {% for silo_id, silo in silo_structure.items() %}
+      <div class="silo-card">
+        <div class="silo-name">{{ silo.silo_name }}</div>
+        <div class="silo-pillar">Pillar: {% if silo.pillar_url %}<a href="{{ silo.pillar_url }}" target="_blank">{{ silo.pillar_url | truncate(50) }}</a>{% else %}<span class="gap-warning">No pillar — content gap detected</span>{% endif %}</div>
+        <div class="silo-stat">Cluster posts: {{ silo.cluster_post_count }} &nbsp;|&nbsp; Money pages: {{ silo.money_page_count }}</div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+  <!-- Per-Page Reports -->
+  <div id="pages">
+    <div class="section-title">Page-by-Page Report ({{ page_reports|length }} pages)</div>
+    <div class="controls">
+      <button class="btn" onclick="expandAll()">Expand All</button>
+      <button class="btn" onclick="collapseAll()">Collapse All</button>
+      <button class="btn" onclick="filterType('pillar')">Pillars Only</button>
+      <button class="btn" onclick="filterType('money_page')">Money Pages Only</button>
+      <button class="btn" onclick="filterType('orphan_candidate')">Orphans Only</button>
+      <button class="btn" onclick="filterType(null)">Show All</button>
+    </div>
+
+    {% for page in page_reports %}
+    <div class="page-card" data-type="{{ page.page_type }}" onclick="toggleCard(this)">
+      <div class="page-card-header">
+        <div>
+          <div class="page-url">{{ page.url }}</div>
+          <div class="page-meta">
+            <span class="badge badge-{{ page.page_type }}">{{ page.page_type_label }}</span>
+            <span class="badge" style="background:var(--surface2);color:var(--text-muted)">{{ page.cluster_label }}</span>
+            <span class="badge" style="background:var(--surface2);color:var(--text-muted)">{{ '{:,}'.format(page.clicks) }} clicks</span>
+            {% if page.incoming_links %}<span class="badge badge-p1">{{ page.incoming_links|length }} incoming</span>{% endif %}
+            {% if page.outgoing_links %}<span class="badge badge-p2">{{ page.outgoing_links|length }} outgoing</span>{% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div class="page-card-body">
+
+        {% if page.incoming_links %}
+        <div class="subsection-title">Incoming Links — pages that should link TO this page</div>
+        <table class="link-table">
+          <thead><tr><th>Source Page</th><th>Anchor Text</th><th>Type</th><th>Priority</th><th>Reason</th></tr></thead>
+          <tbody>
+          {% for link in page.incoming_links %}
+          <tr>
+            <td><a href="{{ link.source_url }}" target="_blank">{{ link.source_url | truncate(55) }}</a></td>
+            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
+            <td>{{ link.link_type }}</td>
+            <td><span class="badge badge-p{{ link.priority }}">P{{ link.priority }}</span></td>
+            <td class="reason-text">{{ link.reason }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <div class="no-data">No incoming link recommendations for this page.</div>
+        {% endif %}
+
+        {% if page.outgoing_links %}
+        <div class="subsection-title" style="margin-top:16px">Outgoing Links — pages this page should link TO</div>
+        <table class="link-table">
+          <thead><tr><th>Target Page</th><th>Anchor Text</th><th>Type</th><th>Priority</th><th>Reason</th></tr></thead>
+          <tbody>
+          {% for link in page.outgoing_links %}
+          <tr>
+            <td><a href="{{ link.target_url }}" target="_blank">{{ link.target_url | truncate(55) }}</a></td>
+            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
+            <td>{{ link.link_type }}</td>
+            <td><span class="badge badge-p{{ link.priority }}">P{{ link.priority }}</span></td>
+            <td class="reason-text">{{ link.reason }}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        {% endif %}
+
+        {% if page.money_page_rec %}
+        <div class="money-highlight">
+          <div class="money-label">Revenue Connection</div>
+          <div>Link to: <a href="{{ page.money_page_rec.target_url }}" target="_blank">{{ page.money_page_rec.target_url }}</a></div>
+          <div>Anchor: <span class="anchor-text">"{{ page.money_page_rec.anchor_text }}"</span></div>
+          <div class="reason-text">{{ page.money_page_rec.reason }}</div>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <!-- Keyword Clusters -->
+  <div id="clusters">
+    <div class="section-title">Keyword Clusters ({{ clusters|length }})</div>
+    <div class="cluster-grid">
+      {% for cluster_id, cluster in clusters.items() %}
+      <div class="cluster-card">
+        <div class="cluster-label">{{ cluster.label }}</div>
+        <div class="cluster-intent">{{ cluster.intent }} &nbsp;·&nbsp; {{ cluster.query_count }} queries</div>
+        {% if cluster.lsi_terms %}
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">LSI Terms:</div>
+        <div class="tag-list" style="margin-bottom:8px">
+          {% for term in cluster.lsi_terms[:6] %}<span class="tag">{{ term }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if cluster.anchor_variants %}
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px">Anchor Variants:</div>
+        <div class="tag-list">
+          {% for anchor in cluster.anchor_variants %}<span class="tag" style="color:var(--green)">{{ anchor }}</span>{% endfor %}
+        </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<script>
+function toggleCard(card) {
+  card.classList.toggle('expanded');
+}
+function expandAll() {
+  document.querySelectorAll('.page-card').forEach(c => {
+    if (c.style.display !== 'none') c.classList.add('expanded');
+  });
+}
+function collapseAll() {
+  document.querySelectorAll('.page-card').forEach(c => c.classList.remove('expanded'));
+}
+function filterType(type) {
+  document.querySelectorAll('.page-card').forEach(c => {
+    c.style.display = (!type || c.dataset.type === type) ? 'block' : 'none';
+  });
+}
+</script>
+</body>
+</html>
