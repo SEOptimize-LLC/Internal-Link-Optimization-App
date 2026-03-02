@@ -308,29 +308,6 @@ if st.session_state.step == "setup":
             help="Remove queries containing the brand name from clustering",
         )
 
-        st.divider()
-        st.subheader("4. Target Market")
-        st.caption(
-            "Used for DataForSEO search volume + keyword difficulty lookup. "
-            "Leave as-is if DataForSEO is not configured."
-        )
-
-        from src.utils.dataforseo import LOCATION_OPTIONS
-        location_name = st.selectbox(
-            "Target Country",
-            options=list(LOCATION_OPTIONS.keys()),
-            index=0,
-            help="Country for search volume and keyword difficulty data",
-        )
-        location_code = LOCATION_OPTIONS[location_name]
-
-        language_code = st.selectbox(
-            "Language",
-            options=["en", "es", "fr", "de", "pt", "nl", "it"],
-            index=0,
-            help="Language for keyword metrics lookup",
-        )
-
     with col2:
         st.subheader("3. Business Profile")
         st.markdown(
@@ -363,6 +340,29 @@ if st.session_state.step == "setup":
                 placeholder="https://docs.google.com/document/d/...",
                 help="Must be set to 'Anyone with the link can view'",
             )
+
+        st.divider()
+        st.subheader("4. Target Market")
+        st.caption(
+            "Used for DataForSEO search volume + keyword difficulty lookup. "
+            "Leave as-is if DataForSEO is not configured."
+        )
+
+        from src.utils.dataforseo import LOCATION_OPTIONS
+        location_name = st.selectbox(
+            "Target Country",
+            options=list(LOCATION_OPTIONS.keys()),
+            index=0,
+            help="Country for search volume and keyword difficulty data",
+        )
+        location_code = LOCATION_OPTIONS[location_name]
+
+        language_code = st.selectbox(
+            "Language",
+            options=["en", "es", "fr", "de", "pt", "nl", "it"],
+            index=0,
+            help="Language for keyword metrics lookup",
+        )
 
     st.divider()
 
