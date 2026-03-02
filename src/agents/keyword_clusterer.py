@@ -254,9 +254,12 @@ def cluster_keywords(
         progress_callback: Optional status update callback
 
     Returns:
-        clusters dict: {cluster_id: {label, intent, queries[],
-            page_assignments[], query_count,
-            total_search_volume, avg_difficulty}}
+        Tuple of:
+          - clusters dict: {cluster_id: {label, intent, queries[],
+                page_assignments[], query_count,
+                total_search_volume, avg_difficulty}}
+          - keyword_metrics dict: {query_lower: {search_volume, keyword_difficulty,
+                competition, cpc}} — raw per-query DataForSEO data (empty if not configured)
     """
     def _progress(msg: str):
         if progress_callback:
@@ -389,4 +392,4 @@ def cluster_keywords(
         }
 
     _progress(f"Keyword clustering complete: {len(final_clusters)} topic clusters")
-    return final_clusters
+    return final_clusters, keyword_metrics

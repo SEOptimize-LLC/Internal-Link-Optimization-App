@@ -89,6 +89,7 @@ def _init_state():
         "pages_df": None,
         "profile": None,
         "clusters": None,
+        "keyword_metrics": None,  # per-query DataForSEO metrics {query_lower: {search_volume, kd, ...}}
         "page_taxonomy_df": None,
         "silo_structure": None,
         "recommendations_df": None,
@@ -499,7 +500,7 @@ elif st.session_state.step == "running":
             update_step(3, "done", f"{len(clusters)} clusters identified")
         else:
             update_step(3, "running")
-            clusters = cluster_keywords(
+            clusters, keyword_metrics = cluster_keywords(
                 queries_df=queries_df,
                 profile=profile,
                 pages_df=pages_df,
@@ -508,6 +509,7 @@ elif st.session_state.step == "running":
                 progress_callback=lambda msg: status_text.caption(msg),
             )
             st.session_state.clusters = clusters
+            st.session_state.keyword_metrics = keyword_metrics
             update_step(3, "done", f"{len(clusters)} clusters identified")
 
         # ── Step 4: Content Categorization ───────────────────────────────────
@@ -755,9 +757,11 @@ elif st.session_state.step == "results":
                 height=min(50 + 35 * len(cluster_summary_df), 600),
             )
 
-            # Expandable detail per cluster (sample queries + assigned pages)
+            # Per-cluster expandable query detail tables
             st.markdown("---")
-            st.markdown("**Cluster Details**")
+            st.markdown("**Cluster Details — click to see every query with its metrics**")
+            kw_metrics = st.session_state.keyword_metrics or {}
+
             for _, row in cluster_summary_df.iterrows():
                 cluster_id = next(
                     (cid for cid, c in clusters.items() if c["label"] == row["Cluster"]), None
@@ -765,20 +769,49 @@ elif st.session_state.step == "results":
                 if cluster_id is None:
                     continue
                 cluster = clusters[cluster_id]
-                with st.expander(f"{row['Cluster']} — {row['Queries']} queries · {int(row['Monthly Searches']):,} searches · KD {row['Avg KD']:.0f}"):
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        assigned = cluster.get("page_assignments", [])
-                        if assigned:
-                            st.markdown(f"**Assigned Pages ({len(assigned)})**")
-                            for url in assigned[:5]:
-                                st.caption(f"• {url}")
-                            if len(assigned) > 5:
-                                st.caption(f"  ...and {len(assigned) - 5} more")
-                    with col_b:
-                        if cluster.get("queries"):
-                            st.markdown("**Sample Queries**")
-                            st.caption(", ".join(cluster["queries"][:12]))
+                sv_str = f"{int(row['Monthly Searches']):,}" if row['Monthly Searches'] else "—"
+                kd_str = f"{row['Avg KD']:.0f}" if row['Avg KD'] else "—"
+                with st.expander(
+                    f"**{row['Cluster']}** · {row['Queries']} queries · "
+                    f"{int(row['Clicks']):,} clicks · {sv_str} searches · KD {kd_str}"
+                ):
+                    # Assigned pages
+                    assigned = cluster.get("page_assignments", [])
+                    if assigned:
+                        st.caption(f"**Assigned pages:** {', '.join(assigned[:3])}"
+                                   + (f" +{len(assigned)-3} more" if len(assigned) > 3 else ""))
+
+                    st.markdown("**All queries in this cluster:**")
+
+                    # Build per-query table
+                    q_rows = []
+                    for q in cluster.get("queries", []):
+                        q_lower = q.lower().strip()
+                        gsc = query_metrics.get(q_lower, {})
+                        dfs = kw_metrics.get(q_lower, {})
+                        q_rows.append({
+                            "Query": q,
+                            "Clicks": gsc.get("clicks", 0),
+                            "Impressions": gsc.get("impressions", 0),
+                            "Monthly Searches": dfs.get("search_volume", 0),
+                            "KD": dfs.get("keyword_difficulty", 0),
+                        })
+
+                    q_df = (
+                        pd.DataFrame(q_rows)
+                        .sort_values("Clicks", ascending=False)
+                        .reset_index(drop=True)
+                    )
+                    st.dataframe(
+                        q_df.style.format({
+                            "Clicks": "{:,}",
+                            "Impressions": "{:,}",
+                            "Monthly Searches": "{:,}",
+                            "KD": "{:.0f}",
+                        }),
+                        use_container_width=True,
+                        height=min(50 + 35 * len(q_rows), 500),
+                    )
         else:
             st.info("No cluster data available.")
 
