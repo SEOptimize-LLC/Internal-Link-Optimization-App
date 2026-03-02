@@ -80,6 +80,8 @@ def _init_state():
         "oauth_state": None,       # CSRF state token
         "oauth_flow": None,        # Flow object — must persist for PKCE token exchange
         "selected_model": "anthropic/claude-sonnet-4-6",
+        "location_code": 2840,     # DataForSEO location code (default US)
+        "language_code": "en",     # DataForSEO language code
         "queries_df": None,
         "pages_df": None,
         "profile": None,
@@ -306,6 +308,29 @@ if st.session_state.step == "setup":
             help="Remove queries containing the brand name from clustering",
         )
 
+        st.divider()
+        st.subheader("4. Target Market")
+        st.caption(
+            "Used for DataForSEO search volume + keyword difficulty lookup. "
+            "Leave as-is if DataForSEO is not configured."
+        )
+
+        from src.utils.dataforseo import LOCATION_OPTIONS
+        location_name = st.selectbox(
+            "Target Country",
+            options=list(LOCATION_OPTIONS.keys()),
+            index=0,
+            help="Country for search volume and keyword difficulty data",
+        )
+        location_code = LOCATION_OPTIONS[location_name]
+
+        language_code = st.selectbox(
+            "Language",
+            options=["en", "es", "fr", "de", "pt", "nl", "it"],
+            index=0,
+            help="Language for keyword metrics lookup",
+        )
+
     with col2:
         st.subheader("3. Business Profile")
         st.markdown(
@@ -369,6 +394,8 @@ if st.session_state.step == "setup":
         st.session_state._profile_url = profile_url
         st.session_state._date_range = date_range
         st.session_state._filter_branded = filter_branded
+        st.session_state.location_code = location_code
+        st.session_state.language_code = language_code
         st.session_state.step = "running"
         st.rerun()
 
@@ -460,6 +487,8 @@ elif st.session_state.step == "running":
             queries_df=queries_df,
             profile=profile,
             pages_df=pages_df,
+            location_code=st.session_state.location_code,
+            language_code=st.session_state.language_code,
             progress_callback=lambda msg: status_text.caption(msg),
         )
         st.session_state.clusters = clusters
@@ -650,27 +679,46 @@ elif st.session_state.step == "results":
             st.info("No page taxonomy data available.")
 
     with tab3:
-        st.subheader(f"Keyword Clusters ({len(clusters) if clusters else 0})")
+        n_clusters = len(clusters) if clusters else 0
+        st.subheader(f"Keyword Clusters ({n_clusters})")
 
         if clusters:
-            for cluster_id, cluster in clusters.items():
-                with st.expander(f"{cluster['label']} ({cluster['intent']}) — {cluster['query_count']} queries"):
-                    col_a, col_b, col_c = st.columns(3)
+            # Sort clusters by total_search_volume descending (traffic potential)
+            sorted_clusters = sorted(
+                clusters.items(),
+                key=lambda x: x[1].get("total_search_volume", 0),
+                reverse=True,
+            )
+
+            for cluster_id, cluster in sorted_clusters:
+                sv = cluster.get("total_search_volume", 0)
+                kd = cluster.get("avg_difficulty", 0)
+                sv_label = f" · {sv:,} mo. searches" if sv else ""
+                kd_label = f" · KD {kd:.0f}" if kd else ""
+                header = (
+                    f"{cluster['label']} ({cluster['intent']}) "
+                    f"— {cluster['query_count']} queries{sv_label}{kd_label}"
+                )
+                with st.expander(header):
+                    col_a, col_b = st.columns(2)
                     with col_a:
-                        st.markdown("**LSI Terms**")
-                        for term in cluster.get("lsi_terms", []):
-                            st.caption(f"• {term}")
+                        if sv or kd:
+                            st.markdown("**Traffic Potential**")
+                            if sv:
+                                st.caption(f"• Monthly search volume: **{sv:,}**")
+                            if kd:
+                                st.caption(f"• Avg keyword difficulty: **{kd:.0f}/100**")
                     with col_b:
-                        st.markdown("**NLP Entities**")
-                        for entity in cluster.get("entities", []):
-                            st.caption(f"• {entity}")
-                    with col_c:
-                        st.markdown("**Anchor Variants**")
-                        for anchor in cluster.get("anchor_variants", []):
-                            st.caption(f'"{anchor}"')
+                        assigned = cluster.get("page_assignments", [])
+                        if assigned:
+                            st.markdown(f"**Assigned Pages ({len(assigned)})**")
+                            for url in assigned[:5]:
+                                st.caption(f"• {url}")
+                            if len(assigned) > 5:
+                                st.caption(f"  ...and {len(assigned) - 5} more")
                     if cluster.get("queries"):
                         st.markdown("**Sample Queries**")
-                        st.caption(", ".join(cluster["queries"][:10]))
+                        st.caption(", ".join(cluster["queries"][:15]))
         else:
             st.info("No cluster data available.")
 
