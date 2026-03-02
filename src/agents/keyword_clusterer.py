@@ -41,9 +41,16 @@ def _cluster_batch(
     queries: list[str],
     business_context: str,
     batch_index: int,
+    target_cluster_count: int = 0,
 ) -> list[dict]:
     """Cluster a batch of queries using AI."""
     query_list = "\n".join(f"- {q}" for q in queries)
+
+    target_str = (
+        f" Produce EXACTLY {target_cluster_count} clusters for this batch."
+        if target_cluster_count > 0
+        else ""
+    )
 
     messages = [
         {"role": "system", "content": CLUSTERING_SYSTEM_PROMPT},
@@ -51,7 +58,7 @@ def _cluster_batch(
             "role": "user",
             "content": (
                 f"Business context: {business_context}\n\n"
-                f"Cluster these {len(queries)} queries:\n{query_list}"
+                f"Cluster these {len(queries)} queries:{target_str}\n{query_list}"
             ),
         },
     ]
@@ -314,16 +321,35 @@ def cluster_keywords(
         f"{MAX_QUERIES_PER_CLUSTER_BATCH} queries each"
     )
 
+    # Compute global target cluster count, then derive per-batch target so the
+    # model produces a predictable number of clusters regardless of batch count.
+    global_target = max(15, min(60, len(unique_queries) // 90))
+    num_batches = len(batches)
+    per_batch_target = max(3, min(8, round(global_target / num_batches)))
+    logger.info(
+        "Cluster targets — global: %d, per-batch: %d (%d batches)",
+        global_target, per_batch_target, num_batches,
+    )
+
     all_batch_clusters = []
     for i, batch in enumerate(batches):
         _progress(f"Clustering batch {i + 1}/{len(batches)} ({len(batch)} queries)...")
-        batch_clusters = _cluster_batch(batch, business_context, i)
+        batch_clusters = _cluster_batch(batch, business_context, i, per_batch_target)
         all_batch_clusters.append(batch_clusters)
 
     # Merge clusters from batches
     raw_clusters = _merge_cross_batch_clusters(
         all_batch_clusters, total_keyword_count=len(unique_queries)
     )
+
+    # Safety net: if merge still produced far too many clusters, force one more pass
+    if len(raw_clusters) > global_target * 1.5:
+        logger.warning(
+            "Post-merge has %d clusters (target %d) — running final consolidation",
+            len(raw_clusters), global_target,
+        )
+        raw_clusters = _merge_cluster_chunk(raw_clusters, global_target)
+
     _progress(f"Identified {len(raw_clusters)} topic clusters")
 
     # --- Page assignments ---

@@ -266,6 +266,18 @@ def fetch_gsc_data(
 
     pages_df = pd.DataFrame(page_records)
 
+    # Deduplicate: multiple raw GSC URLs may normalize to the same path
+    # (e.g. trailing slashes, query params stripped). Aggregate their metrics.
+    if not pages_df.empty:
+        pages_df = (
+            pages_df.groupby("url", as_index=False)
+            .agg({"clicks": "sum", "impressions": "sum", "ctr": "mean", "position": "mean"})
+        )
+        pages_df["opportunity_score"] = pages_df.apply(
+            lambda r: compute_opportunity_score(r["impressions"], r["position"], r["clicks"]),
+            axis=1,
+        )
+
     # Add top query per page to pages_df
     if not queries_df.empty and not pages_df.empty:
         top_queries = (
