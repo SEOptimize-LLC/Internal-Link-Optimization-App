@@ -6,10 +6,10 @@ A Streamlit app that uses Google Search Console data and a Business Profile docu
 
 1. **Fetches GSC organic data** — queries, pages, clicks, impressions, CTR, and position for the last 90 days (configurable)
 2. **Parses your Business Profile** — extracts brand context, USP, ICP, pain points, and services/products to anchor all analysis
-3. **Semantically clusters keywords** — groups queries into topic clusters and expands each with LSI terms, NLP entities, and anchor text variants
+3. **Semantically clusters keywords** — groups queries into topic clusters; optionally enriches each cluster with DataForSEO search volume and keyword difficulty data so you can see both organic performance and traffic potential side by side
 4. **Classifies every page** — labels pages as Pillar, Cluster Post, Money Page, or Orphan Candidate
 5. **Builds SILO structure** — defines which pillar owns which cluster posts, flags content gaps
-6. **Generates prioritized link recommendations** — 4 types across 3 priority levels
+6. **Generates prioritized link recommendations** — 4 types across 3 priority levels, with contextual AI-generated anchor text per source→target pair
 7. **Exports 3 deliverables** — Interactive SILO diagram, CSV action list, and a full per-page HTML report
 
 ## Link Recommendation Types
@@ -25,7 +25,8 @@ A Streamlit app that uses Google Search Console data and a Business Profile docu
 
 - **UI**: Streamlit
 - **GSC**: Google Search Console API (OAuth2 — sign in with Google)
-- **AI**: OpenRouter → Claude Sonnet 4.5 (reasoning) + Gemini 2.0 Flash (batch clustering)
+- **AI**: OpenRouter (model selectable — defaults to Claude Sonnet 4.6)
+- **Keyword metrics**: DataForSEO (optional — search volume + keyword difficulty)
 - **Storage**: Supabase (PostgreSQL) + local file exports
 - **Visualization**: networkx + Plotly (interactive SILO diagram)
 - **Document parsing**: PyPDF2, python-docx, requests (Google Docs)
@@ -69,15 +70,42 @@ Edit `.streamlit/secrets.toml`:
 [google]
 client_id = "your_google_oauth_client_id"
 client_secret = "your_google_oauth_client_secret"
-redirect_uri = "http://localhost:8501"
+redirect_uri = "http://localhost:8501"   # or your Streamlit Cloud URL
 
 OPENROUTER_API_KEY = "sk-or-your-key-here"
 
 SUPABASE_URL = "https://your-project.supabase.co"
 SUPABASE_SERVICE_KEY = "sb_secret_your-key-here"
+
+# Optional — enables search volume + keyword difficulty enrichment
+# Get credentials at https://app.dataforseo.com/api-dashboard
+DATAFORSEO_LOGIN = "your_dataforseo_email@example.com"
+DATAFORSEO_PASSWORD = "your_dataforseo_api_password"
 ```
 
 > `secrets.toml` is gitignored and will never be committed. The template file (`secrets_template.toml`) is committed as a reference only.
+
+#### Streamlit Cloud — Secrets tab
+
+When deploying to Streamlit Cloud, add the same keys under **Settings → Secrets** in TOML format (no file upload needed — paste the content directly):
+
+```toml
+[google]
+client_id = "..."
+client_secret = "..."
+redirect_uri = "https://your-app.streamlit.app"
+
+OPENROUTER_API_KEY = "..."
+
+SUPABASE_URL = "..."
+SUPABASE_SERVICE_KEY = "..."
+
+# Optional
+DATAFORSEO_LOGIN = "..."
+DATAFORSEO_PASSWORD = "..."
+```
+
+> DataForSEO credentials are optional. If omitted, keyword clustering still works — clusters just won't show monthly search volume or keyword difficulty scores.
 
 ### 4. Set up Supabase
 
@@ -98,9 +126,10 @@ streamlit run app.py
 ### Step 1 — Setup
 
 - Enter client name
-- Click **Sign in with Google** → authorize read-only access to Search Console → select property from the dropdown
-- Set date range (default: 90 days)
+- Click **Sign in with Google** → authorize access to Search Console → select property from the dropdown
+- Set date range (default: 90 days) and optionally filter branded queries
 - Upload the Business Profile document (`.txt`, `.md`, `.pdf`, `.docx`) or paste a Google Doc URL
+- Select **Target Country** and **Language** — used for DataForSEO search volume and keyword difficulty lookup (only applies if DataForSEO credentials are configured; defaults to United States / English)
 
 ### Step 2 — Analysis
 
@@ -109,10 +138,10 @@ Analysis runs automatically across 6 steps with live progress indicators.
 ### Step 3 — Results Dashboard
 
 - Interactive SILO diagram (hover for details)
-- Filterable link recommendations table
-- Full page taxonomy
-- Keyword clusters with LSI terms
-- Per-page incoming/outgoing link plan
+- Filterable link recommendations table (by priority, SILO, and link type)
+- Full page taxonomy with opportunity scores
+- Keyword clusters sorted by total monthly search volume, with KD scores if DataForSEO is configured
+- Per-page incoming/outgoing link plan with AI-generated anchor text
 
 ### Exports (sidebar)
 
@@ -145,12 +174,13 @@ Supported formats: `.txt`, `.md`, `.pdf`, `.docx`, or a public Google Doc URL.
 │   ├── agents/
 │   │   ├── gsc_fetcher.py          # Agent 1: GSC data extraction
 │   │   ├── profile_parser.py       # Agent 2: Business profile parsing
-│   │   ├── keyword_clusterer.py    # Agent 3: Semantic clustering + LSI expansion
+│   │   ├── keyword_clusterer.py    # Agent 3: Semantic clustering + DataForSEO enrichment
 │   │   ├── content_categorizer.py  # Agent 4: Page labeling + SILO structure
 │   │   ├── link_recommender.py     # Agent 5: Link recommendations
 │   │   └── output_generator.py     # Agent 6: Reports, diagrams, exports
 │   ├── utils/
 │   │   ├── openrouter.py           # OpenRouter API client
+│   │   ├── dataforseo.py           # DataForSEO keyword metrics (search vol + KD)
 │   │   ├── supabase_client.py      # Supabase operations
 │   │   ├── document_parser.py      # Multi-format document parsing
 │   │   └── helpers.py              # Shared utilities
