@@ -451,75 +451,96 @@ elif st.session_state.step == "running":
             prepare_supabase_records,
         )
 
-        run_id = generate_run_id()
-        st.session_state.run_id = run_id
+        # Preserve run_id across Streamlit re-runs — only generate once
+        if not st.session_state.run_id:
+            st.session_state.run_id = generate_run_id()
+        run_id = st.session_state.run_id
 
         # ── Step 1: GSC Data ──────────────────────────────────────────────────
-        update_step(1, "running")
-
-        queries_df, pages_df = fetch_gsc_data(
-            credentials_dict=st.session_state.gsc_credentials,
-            site_url=st.session_state.gsc_property,
-            days_back=st.session_state._date_range,
-            filter_branded=st.session_state._filter_branded,
-            progress_callback=lambda msg: status_text.caption(msg),
-        )
-        st.session_state.queries_df = queries_df
-        st.session_state.pages_df = pages_df
-        update_step(1, "done", f"{len(queries_df):,} queries · {len(pages_df):,} pages")
+        # Checkpoint: skip if already completed in a previous run
+        if st.session_state.queries_df is not None:
+            queries_df = st.session_state.queries_df
+            pages_df = st.session_state.pages_df
+            update_step(1, "done", f"{len(queries_df):,} queries · {len(pages_df):,} pages")
+        else:
+            update_step(1, "running")
+            queries_df, pages_df = fetch_gsc_data(
+                credentials_dict=st.session_state.gsc_credentials,
+                site_url=st.session_state.gsc_property,
+                days_back=st.session_state._date_range,
+                filter_branded=st.session_state._filter_branded,
+                progress_callback=lambda msg: status_text.caption(msg),
+            )
+            st.session_state.queries_df = queries_df
+            st.session_state.pages_df = pages_df
+            update_step(1, "done", f"{len(queries_df):,} queries · {len(pages_df):,} pages")
 
         # ── Step 2: Business Profile ──────────────────────────────────────────
-        update_step(2, "running")
-
-        raw_text = parse_document(
-            file_bytes=st.session_state._profile_bytes,
-            filename=st.session_state._profile_filename,
-            url=st.session_state._profile_url,
-        )
-        profile = parse_business_profile(raw_text)
-        st.session_state.profile = profile
-        update_step(2, "done", f"{profile.brand_name} · {len(profile.services)} services identified")
+        if st.session_state.profile is not None:
+            profile = st.session_state.profile
+            update_step(2, "done", f"{profile.brand_name} · {len(profile.services)} services identified")
+        else:
+            update_step(2, "running")
+            raw_text = parse_document(
+                file_bytes=st.session_state._profile_bytes,
+                filename=st.session_state._profile_filename,
+                url=st.session_state._profile_url,
+            )
+            profile = parse_business_profile(raw_text)
+            st.session_state.profile = profile
+            update_step(2, "done", f"{profile.brand_name} · {len(profile.services)} services identified")
 
         # ── Step 3: Keyword Clustering ────────────────────────────────────────
-        update_step(3, "running")
-
-        clusters = cluster_keywords(
-            queries_df=queries_df,
-            profile=profile,
-            pages_df=pages_df,
-            location_code=st.session_state.location_code,
-            language_code=st.session_state.language_code,
-            progress_callback=lambda msg: status_text.caption(msg),
-        )
-        st.session_state.clusters = clusters
-        update_step(3, "done", f"{len(clusters)} clusters identified")
+        if st.session_state.clusters is not None:
+            clusters = st.session_state.clusters
+            update_step(3, "done", f"{len(clusters)} clusters identified")
+        else:
+            update_step(3, "running")
+            clusters = cluster_keywords(
+                queries_df=queries_df,
+                profile=profile,
+                pages_df=pages_df,
+                location_code=st.session_state.location_code,
+                language_code=st.session_state.language_code,
+                progress_callback=lambda msg: status_text.caption(msg),
+            )
+            st.session_state.clusters = clusters
+            update_step(3, "done", f"{len(clusters)} clusters identified")
 
         # ── Step 4: Content Categorization ───────────────────────────────────
-        update_step(4, "running")
-
-        page_taxonomy_df, silo_structure = categorize_content(
-            pages_df=pages_df,
-            profile=profile,
-            clusters=clusters,
-            progress_callback=lambda msg: status_text.caption(msg),
-        )
-        st.session_state.page_taxonomy_df = page_taxonomy_df
-        st.session_state.silo_structure = silo_structure
-        update_step(4, "done", f"{len(silo_structure)} SILOs · {page_taxonomy_df['page_type'].value_counts().to_dict()}")
+        if st.session_state.page_taxonomy_df is not None:
+            page_taxonomy_df = st.session_state.page_taxonomy_df
+            silo_structure = st.session_state.silo_structure
+            update_step(4, "done", f"{len(silo_structure)} SILOs · {page_taxonomy_df['page_type'].value_counts().to_dict()}")
+        else:
+            update_step(4, "running")
+            page_taxonomy_df, silo_structure = categorize_content(
+                pages_df=pages_df,
+                profile=profile,
+                clusters=clusters,
+                progress_callback=lambda msg: status_text.caption(msg),
+            )
+            st.session_state.page_taxonomy_df = page_taxonomy_df
+            st.session_state.silo_structure = silo_structure
+            update_step(4, "done", f"{len(silo_structure)} SILOs · {page_taxonomy_df['page_type'].value_counts().to_dict()}")
 
         # ── Step 5: Link Recommendations ─────────────────────────────────────
-        update_step(5, "running")
-
-        recommendations_df = generate_link_recommendations(
-            silo_structure=silo_structure,
-            page_taxonomy_df=page_taxonomy_df,
-            clusters=clusters,
-            profile=profile,
-            progress_callback=lambda msg: status_text.caption(msg),
-        )
-        st.session_state.recommendations_df = recommendations_df
-        total_recs = len(recommendations_df) if not recommendations_df.empty else 0
-        update_step(5, "done", f"{total_recs} recommendations generated")
+        if st.session_state.recommendations_df is not None:
+            recommendations_df = st.session_state.recommendations_df
+            total_recs = len(recommendations_df) if not recommendations_df.empty else 0
+            update_step(5, "done", f"{total_recs} recommendations generated")
+        else:
+            update_step(5, "running")
+            recommendations_df = generate_link_recommendations(
+                silo_structure=silo_structure,
+                page_taxonomy_df=page_taxonomy_df,
+                clusters=clusters,
+                profile=profile,
+                progress_callback=lambda msg: status_text.caption(msg),
+            )
+            st.session_state.recommendations_df = recommendations_df
+            total_recs = len(recommendations_df) if not recommendations_df.empty else 0
+            update_step(5, "done", f"{total_recs} recommendations generated")
 
         # ── Step 6: Outputs ───────────────────────────────────────────────────
         update_step(6, "running", "Building SILO diagram...")
