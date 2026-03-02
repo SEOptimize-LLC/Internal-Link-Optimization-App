@@ -77,8 +77,8 @@ def fetch_keyword_metrics(
 
     results: dict[str, dict] = {}
 
-    # ── Search volume (Google Ads) — max 700 per request ─────────────────────
-    SV_BATCH = 700
+    # ── Search volume (Google Ads) — max 1000 per request ────────────────────
+    SV_BATCH = 1000
     for i in range(0, len(keywords), SV_BATCH):
         batch = keywords[i : i + SV_BATCH]
         try:
