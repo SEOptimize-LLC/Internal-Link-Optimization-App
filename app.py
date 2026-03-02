@@ -23,6 +23,9 @@ st.markdown(
     .main { background-color: #0f1117; }
     .stProgress > div > div { background-color: #f5a623; }
     div[data-testid="stMetric"] { background: #1e2130; border: 1px solid #2e3450; border-radius: 8px; padding: 12px; }
+    div[data-testid="stMetricLabel"] p { color: #a0aec0 !important; font-size: 13px !important; }
+    div[data-testid="stMetricValue"] { color: #ffffff !important; }
+    div[data-testid="stMetricValue"] > div { color: #ffffff !important; }
     div[data-testid="stLinkButton"] a {
         background: #4285F4 !important;
         color: white !important;
@@ -633,15 +636,6 @@ elif st.session_state.step == "results":
 
     st.divider()
 
-    # ── SILO Diagram ──────────────────────────────────────────────────────────
-    st.subheader("SILO Architecture Diagram")
-    st.caption("Gold=Pillar · Blue=Cluster Post · Green=Money · Red=Orphan · Edge thickness = Priority")
-
-    if st.session_state.silo_fig is not None:
-        st.plotly_chart(st.session_state.silo_fig, use_container_width=True)
-
-    st.divider()
-
     # ── Tabs ──────────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs([
         "Link Recommendations",
@@ -704,32 +698,76 @@ elif st.session_state.step == "results":
         st.subheader(f"Keyword Clusters ({n_clusters})")
 
         if clusters:
-            # Sort clusters by total_search_volume descending (traffic potential)
-            sorted_clusters = sorted(
-                clusters.items(),
-                key=lambda x: x[1].get("total_search_volume", 0),
-                reverse=True,
+            # Build query → {clicks, impressions} lookup from GSC data
+            query_metrics: dict[str, dict] = {}
+            raw_queries_df = st.session_state.queries_df
+            if raw_queries_df is not None:
+                for _, row in raw_queries_df.iterrows():
+                    q = str(row.get("query", "")).lower().strip()
+                    if q:
+                        query_metrics[q] = {
+                            "clicks": int(row.get("clicks", 0) or 0),
+                            "impressions": int(row.get("impressions", 0) or 0),
+                        }
+
+            # Build summary table with all metrics per cluster
+            cluster_rows = []
+            for cluster_id, cluster in clusters.items():
+                cluster_queries = [str(q).lower().strip() for q in cluster.get("queries", [])]
+                total_clicks = sum(query_metrics.get(q, {}).get("clicks", 0) for q in cluster_queries)
+                total_impressions = sum(query_metrics.get(q, {}).get("impressions", 0) for q in cluster_queries)
+                sv = cluster.get("total_search_volume", 0) or 0
+                kd = cluster.get("avg_difficulty", 0) or 0
+                cluster_rows.append({
+                    "Cluster": cluster["label"],
+                    "Intent": cluster.get("intent", ""),
+                    "Queries": cluster.get("query_count", len(cluster_queries)),
+                    "Clicks": total_clicks,
+                    "Impressions": total_impressions,
+                    "Monthly Searches": sv,
+                    "Avg KD": round(kd, 1) if kd else 0,
+                    "Sample Queries": ", ".join(cluster.get("queries", [])[:8]),
+                })
+
+            cluster_summary_df = pd.DataFrame(cluster_rows).sort_values(
+                "Monthly Searches", ascending=False
+            ).reset_index(drop=True)
+
+            # Download button
+            csv_bytes = cluster_summary_df.to_csv(index=False).encode()
+            st.download_button(
+                "Download Clusters CSV",
+                data=csv_bytes,
+                file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.csv",
+                mime="text/csv",
             )
 
-            for cluster_id, cluster in sorted_clusters:
-                sv = cluster.get("total_search_volume", 0)
-                kd = cluster.get("avg_difficulty", 0)
-                sv_label = f" · {sv:,} mo. searches" if sv else ""
-                kd_label = f" · KD {kd:.0f}" if kd else ""
-                header = (
-                    f"{cluster['label']} ({cluster['intent']}) "
-                    f"— {cluster['query_count']} queries{sv_label}{kd_label}"
+            # Display table (hide Sample Queries column — too wide for table)
+            display_df = cluster_summary_df.drop(columns=["Sample Queries"])
+            st.dataframe(
+                display_df.style.format({
+                    "Clicks": "{:,}",
+                    "Impressions": "{:,}",
+                    "Monthly Searches": "{:,}",
+                    "Avg KD": "{:.0f}",
+                }),
+                use_container_width=True,
+                height=min(50 + 35 * len(cluster_summary_df), 600),
+            )
+
+            # Expandable detail per cluster (sample queries + assigned pages)
+            st.markdown("---")
+            st.markdown("**Cluster Details**")
+            for _, row in cluster_summary_df.iterrows():
+                cluster_id = next(
+                    (cid for cid, c in clusters.items() if c["label"] == row["Cluster"]), None
                 )
-                with st.expander(header):
+                if cluster_id is None:
+                    continue
+                cluster = clusters[cluster_id]
+                with st.expander(f"{row['Cluster']} — {row['Queries']} queries · {int(row['Monthly Searches']):,} searches · KD {row['Avg KD']:.0f}"):
                     col_a, col_b = st.columns(2)
                     with col_a:
-                        if sv or kd:
-                            st.markdown("**Traffic Potential**")
-                            if sv:
-                                st.caption(f"• Monthly search volume: **{sv:,}**")
-                            if kd:
-                                st.caption(f"• Avg keyword difficulty: **{kd:.0f}/100**")
-                    with col_b:
                         assigned = cluster.get("page_assignments", [])
                         if assigned:
                             st.markdown(f"**Assigned Pages ({len(assigned)})**")
@@ -737,9 +775,10 @@ elif st.session_state.step == "results":
                                 st.caption(f"• {url}")
                             if len(assigned) > 5:
                                 st.caption(f"  ...and {len(assigned) - 5} more")
-                    if cluster.get("queries"):
-                        st.markdown("**Sample Queries**")
-                        st.caption(", ".join(cluster["queries"][:15]))
+                    with col_b:
+                        if cluster.get("queries"):
+                            st.markdown("**Sample Queries**")
+                            st.caption(", ".join(cluster["queries"][:12]))
         else:
             st.info("No cluster data available.")
 
