@@ -1,5 +1,6 @@
 import base64
 import logging
+from datetime import datetime, timedelta
 
 import requests
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -34,6 +35,14 @@ def _auth_header() -> dict:
     return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
 
 
+def _last_30_days() -> tuple[str, str]:
+    """Return (date_from, date_to) for the previous 30 days as YYYY-MM-DD strings."""
+    today = datetime.utcnow().date()
+    date_to = today - timedelta(days=1)
+    date_from = today - timedelta(days=30)
+    return date_from.strftime("%Y-%m-%d"), date_to.strftime("%Y-%m-%d")
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=30),
@@ -59,6 +68,11 @@ def fetch_keyword_metrics(
     """
     Fetch search volume and keyword difficulty from DataForSEO.
 
+    Search volume is the average of:
+      1. Google Ads search volume (location + language filtered, last 30 days)
+      2. Clickstream global search volume (last 30 days)
+    If only one source returns data for a keyword, that value is used as-is.
+
     Args:
         keywords: List of keyword strings to look up
         location_code: DataForSEO location code (default 2840 = US)
@@ -75,37 +89,104 @@ def fetch_keyword_metrics(
     if not keywords:
         return {}
 
-    results: dict[str, dict] = {}
+    date_from, date_to = _last_30_days()
+    BATCH = 1000
 
-    # ── Search volume (Google Ads) — max 1000 per request ────────────────────
-    SV_BATCH = 1000
-    for i in range(0, len(keywords), SV_BATCH):
-        batch = keywords[i : i + SV_BATCH]
+    # ── 1. Google Ads search volume (location-specific, last 30 days) ─────────
+    google_sv: dict[str, int] = {}
+    google_meta: dict[str, dict] = {}  # competition + cpc come from Google Ads only
+    total_sv_batches = -(-len(keywords) // BATCH)
+
+    for i in range(0, len(keywords), BATCH):
+        batch = keywords[i : i + BATCH]
         try:
             data = _post(
                 "/keywords_data/google_ads/search_volume/live",
-                [{"keywords": batch, "location_code": location_code, "language_code": language_code}],
+                [{
+                    "keywords": batch,
+                    "location_code": location_code,
+                    "language_code": language_code,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                }],
             )
             for task in data.get("tasks", []):
                 for item in task.get("result") or []:
                     kw = (item.get("keyword") or "").lower()
                     if kw:
-                        results[kw] = {
-                            "search_volume": item.get("search_volume") or 0,
+                        google_sv[kw] = item.get("search_volume") or 0
+                        google_meta[kw] = {
                             "competition": round(item.get("competition") or 0.0, 2),
                             "cpc": round(item.get("cpc") or 0.0, 2),
-                            "keyword_difficulty": 0,
                         }
         except Exception as e:
             logger.warning(
-                "DataForSEO search volume batch %d/%d failed: %s",
-                i // SV_BATCH + 1,
-                -(-len(keywords) // SV_BATCH),
+                "DataForSEO Google Ads SV batch %d/%d failed: %s",
+                i // BATCH + 1,
+                total_sv_batches,
                 e,
             )
 
-    # ── Keyword difficulty — max 1000 per request ────────────────────────────
+    # ── 2. Clickstream global search volume (last 30 days) ───────────────────
+    clickstream_sv: dict[str, int] = {}
+    total_cs_batches = -(-len(keywords) // BATCH)
+
+    for i in range(0, len(keywords), BATCH):
+        batch = keywords[i : i + BATCH]
+        try:
+            data = _post(
+                "/keywords_data/clickstream_data/global_search_volume/live",
+                [{
+                    "keywords": batch,
+                    "date_from": date_from,
+                    "date_to": date_to,
+                }],
+            )
+            for task in data.get("tasks", []):
+                for item in task.get("result") or []:
+                    kw = (item.get("keyword") or "").lower()
+                    if kw:
+                        clickstream_sv[kw] = item.get("search_volume") or 0
+        except Exception as e:
+            logger.warning(
+                "DataForSEO Clickstream SV batch %d/%d failed: %s",
+                i // BATCH + 1,
+                total_cs_batches,
+                e,
+            )
+
+    # ── 3. Average the two search volume sources per keyword ──────────────────
+    results: dict[str, dict] = {}
+    all_sv_keywords = set(google_sv.keys()) | set(clickstream_sv.keys())
+
+    for kw in all_sv_keywords:
+        g = google_sv.get(kw, 0)
+        c = clickstream_sv.get(kw, 0)
+
+        if g and c:
+            avg_sv = round((g + c) / 2)
+        else:
+            avg_sv = g or c  # use whichever is non-zero
+
+        meta = google_meta.get(kw, {"competition": 0.0, "cpc": 0.0})
+        results[kw] = {
+            "search_volume": avg_sv,
+            "competition": meta["competition"],
+            "cpc": meta["cpc"],
+            "keyword_difficulty": 0,
+        }
+
+    logger.info(
+        "Search volume sources — Google Ads: %d keywords, Clickstream: %d keywords, merged: %d keywords",
+        len(google_sv),
+        len(clickstream_sv),
+        len(results),
+    )
+
+    # ── 4. Keyword difficulty — max 1000 per request ──────────────────────────
     KD_BATCH = 1000
+    total_kd_batches = -(-len(keywords) // KD_BATCH)
+
     for i in range(0, len(keywords), KD_BATCH):
         batch = keywords[i : i + KD_BATCH]
         try:
@@ -131,7 +212,7 @@ def fetch_keyword_metrics(
             logger.warning(
                 "DataForSEO keyword difficulty batch %d/%d failed: %s",
                 i // KD_BATCH + 1,
-                -(-len(keywords) // KD_BATCH),
+                total_kd_batches,
                 e,
             )
 
