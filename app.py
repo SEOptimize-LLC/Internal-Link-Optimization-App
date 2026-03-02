@@ -79,7 +79,7 @@ def _init_state():
         "gsc_credentials": None,   # OAuth credentials dict
         "oauth_state": None,       # CSRF state token
         "oauth_flow": None,        # Flow object — must persist for PKCE token exchange
-        "selected_model": "anthropic/claude-sonnet-4-6",
+        "selected_model": "anthropic/claude-sonnet-4-5",
         "location_code": 2840,     # DataForSEO location code (default US)
         "language_code": "en",     # DataForSEO language code
         "queries_df": None,

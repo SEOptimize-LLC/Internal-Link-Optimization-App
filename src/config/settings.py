@@ -17,11 +17,13 @@ MODEL_REASONING = os.getenv("MODEL_REASONING", "anthropic/claude-sonnet-4-6")
 MODEL_FAST = os.getenv("MODEL_FAST", "anthropic/claude-sonnet-4-6")
 
 AVAILABLE_MODELS = [
-    "anthropic/claude-sonnet-4-6",
-    "openai/gpt-5.2",
-    "google/gemini-3.1-pro-preview",
-    "google/gemini-3-flash-preview",
-    "x-ai/grok-4.1-fast",
+    "anthropic/claude-sonnet-4-5",
+    "anthropic/claude-opus-4-5",
+    "google/gemini-2.0-flash-001",
+    "google/gemini-2.5-pro-preview-06-05",
+    "openai/gpt-4.1",
+    "openai/gpt-4o",
+    "x-ai/grok-3-beta",
 ]
 
 # Supabase
