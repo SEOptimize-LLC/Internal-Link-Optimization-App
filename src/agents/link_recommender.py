@@ -23,6 +23,8 @@ Return a JSON object:
       "source_url": "the blog/content page URL",
       "target_url": "the most relevant money page URL",
       "anchor_text": "natural, contextual anchor text (5-8 words)",
+      "placement_hint": "Where on the source page to add the link (e.g. 'In the conclusion when summarising options', 'Near the comparison table')",
+      "copy_snippet": "1-2 sentences with [anchor text]() embedded naturally so the editor can copy-paste directly",
       "reasoning": "why this connection makes business sense"
     }
   ]
@@ -33,6 +35,8 @@ Rules:
 - Choose the MOST relevant money page based on topical alignment and business context
 - Anchor text must be natural and contextual — never use "click here" or generic phrases
 - Anchor text should reflect what the service/product actually does
+- placement_hint: be specific (intro, a named section, conclusion, etc.)
+- copy_snippet: use [anchor text]() as the hyperlink placeholder
 - If no money page is clearly relevant to a content page, omit it from recommendations
 """
 
@@ -47,6 +51,8 @@ Return a JSON object:
       "orphan_url": "the orphan page URL",
       "source_url": "page that should link to the orphan",
       "anchor_text": "natural anchor text for the link",
+      "placement_hint": "Where on the source page to add the link (e.g. 'In the intro when introducing related topics', 'Near the end in a see-also block')",
+      "copy_snippet": "1-2 sentences with [anchor text]() embedded naturally so the editor can copy-paste directly",
       "reasoning": "why this page should link to the orphan"
     }
   ]
@@ -57,15 +63,16 @@ Rules:
 - Choose contextually relevant source pages
 - Each orphan should get 2-3 incoming link recommendations
 - Anchor text must be descriptive and relevant
+- placement_hint: be specific about the section or context
+- copy_snippet: use [anchor text]() as the hyperlink placeholder
 """
 
-ANCHOR_TEXT_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in contextual internal linking.
+LINK_ENRICHMENT_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in contextual internal linking.
 
-For each source→target page pair, generate natural anchor text that:
-- Fits naturally into the source page's topic context
-- Accurately describes what the target page covers
-- Reads like a human writer would use it (not keyword-stuffed)
-- Is 3-7 words long
+For each source→target page pair, generate:
+1. Natural anchor text (3-7 words) that fits the source page context and describes the target
+2. A placement hint: brief note on WHERE in the source page to add the link
+3. A copy snippet: 1-2 sentences with the anchor embedded as [anchor text]() for copy-paste
 
 Return a JSON object:
 {
@@ -73,16 +80,21 @@ Return a JSON object:
     {
       "source_url": "...",
       "target_url": "...",
-      "anchor_text": "natural contextual anchor text here"
+      "anchor_text": "natural contextual anchor text here",
+      "placement_hint": "e.g. 'In the intro when discussing X', 'Near the comparison of Y vs Z'",
+      "copy_snippet": "Sentence with [anchor text]() embedded naturally so the editor can copy-paste"
     }
   ]
 }
 
 Rules:
-- Never use generic phrases like "click here", "learn more", "read this", or "this article"
-- Anchor text must reflect the target page's specific topic
-- Consider the source page's topic so the phrasing flows naturally in context
-- One anchor suggestion per source→target pair
+- anchor_text: never use generic phrases like "click here", "learn more", "read this"
+- anchor_text must reflect the target page's specific topic
+- placement_hint: be specific about the section or moment (intro, a named topic,
+  conclusion, related resources block, etc.)
+- copy_snippet: write as if you are the content editor; use [anchor text]() as the
+  hyperlink placeholder; keep it 1-2 sentences; make it sound natural on the source page
+- One entry per source→target pair
 """
 
 
@@ -118,9 +130,14 @@ def _generate_pillar_cluster_links(
                 "source_url": post_url,
                 "target_url": pillar_url,
                 "anchor_text": cluster_label,
+                "placement_hint": "",
+                "copy_snippet": "",
                 "link_type": "cluster_to_pillar",
                 "priority": 1,
-                "reason": f"Cluster post links back to pillar page for '{silo_name}' SILO structure",
+                "reason": (
+                    f"Cluster post links back to pillar page"
+                    f" for '{silo_name}' SILO structure"
+                ),
                 "silo_id": silo_id,
                 "silo_name": silo_name,
                 "implementation_status": "pending",
@@ -132,9 +149,14 @@ def _generate_pillar_cluster_links(
                 "source_url": pillar_url,
                 "target_url": post_url,
                 "anchor_text": cluster_label,
+                "placement_hint": "",
+                "copy_snippet": "",
                 "link_type": "pillar_to_cluster",
                 "priority": 1,
-                "reason": f"Pillar page links to cluster post to distribute authority within '{silo_name}' SILO",
+                "reason": (
+                    f"Pillar page links to cluster post to distribute authority"
+                    f" within '{silo_name}' SILO"
+                ),
                 "silo_id": silo_id,
                 "silo_name": silo_name,
                 "implementation_status": "pending",
@@ -194,11 +216,15 @@ def _generate_authority_boost_links(
                     "source_url": authority_row["url"],
                     "target_url": opportunity_row["url"],
                     "anchor_text": cluster_label,
+                    "placement_hint": "",
+                    "copy_snippet": "",
                     "link_type": "authority_boost",
                     "priority": 2,
                     "reason": (
-                        f"High-authority page ({authority_row['clicks']:,.0f} clicks) boosts "
-                        f"underperforming page (opportunity score: {opportunity_row['opportunity_score']:.2f}) "
+                        f"High-authority page "
+                        f"({authority_row['clicks']:,.0f} clicks) boosts "
+                        f"underperforming page (opportunity score: "
+                        f"{opportunity_row['opportunity_score']:.2f}) "
                         f"within '{silo_name}' cluster"
                     ),
                     "silo_id": silo_id,
@@ -295,6 +321,8 @@ def _generate_blog_to_money_links(
                     "source_url": source,
                     "target_url": target,
                     "anchor_text": rec.get("anchor_text", ""),
+                    "placement_hint": rec.get("placement_hint", ""),
+                    "copy_snippet": rec.get("copy_snippet", ""),
                     "link_type": "blog_to_money",
                     "priority": 3,
                     "reason": rec.get(
@@ -379,9 +407,13 @@ def _generate_orphan_links(
                 "source_url": rec["source_url"],
                 "target_url": rec["orphan_url"],
                 "anchor_text": rec.get("anchor_text", ""),
+                "placement_hint": rec.get("placement_hint", ""),
+                "copy_snippet": rec.get("copy_snippet", ""),
                 "link_type": "orphan_integration",
                 "priority": 3,
-                "reason": rec.get("reasoning", "Integrating orphan page into site structure"),
+                "reason": rec.get(
+                    "reasoning", "Integrating orphan page into site structure"
+                ),
                 "silo_id": "",
                 "silo_name": "Orphan Integration",
                 "implementation_status": "pending",
@@ -443,12 +475,13 @@ def _enrich_anchor_texts(
                 f"   target_topic: {tgt_context}"
             )
         messages = [
-            {"role": "system", "content": ANCHOR_TEXT_SYSTEM_PROMPT},
+            {"role": "system", "content": LINK_ENRICHMENT_SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": (
                     f"Business context: {business_context}\n\n"
-                    f"Generate anchor text for {len(batch)} link pairs:\n\n"
+                    f"Generate anchor text, placement hint, and copy snippet"
+                    f" for {len(batch)} link pairs:\n\n"
                     + "\n\n".join(pairs_text)
                 ),
             },
@@ -459,8 +492,12 @@ def _enrich_anchor_texts(
             response_format="json",
             temperature=0.2,
         )
-        anchor_map = {
-            (a["source_url"], a["target_url"]): a["anchor_text"]
+        enrichment_map = {
+            (a["source_url"], a["target_url"]): {
+                "anchor_text": a["anchor_text"],
+                "placement_hint": a.get("placement_hint", ""),
+                "copy_snippet": a.get("copy_snippet", ""),
+            }
             for a in result.get("anchors", [])
             if (
                 a.get("source_url")
@@ -468,7 +505,7 @@ def _enrich_anchor_texts(
                 and a.get("anchor_text")
             )
         }
-        return idx, batch, anchor_map
+        return idx, batch, enrichment_map
 
     if progress_callback:
         progress_callback(
@@ -484,8 +521,8 @@ def _enrich_anchor_texts(
         }
         for future in as_completed(futures):
             try:
-                idx, batch, anchor_map = future.result()
-                batch_results[idx] = (batch, anchor_map)
+                idx, batch, enrichment_map = future.result()
+                batch_results[idx] = (batch, enrichment_map)
             except Exception as e:
                 idx = futures[future]
                 logger.warning(
@@ -497,11 +534,11 @@ def _enrich_anchor_texts(
     for item in batch_results:
         if item is None:
             continue
-        batch, anchor_map = item
+        batch, enrichment_map = item
         for rec in batch:
             key = (rec["source_url"], rec["target_url"])
-            if key in anchor_map:
-                rec = {**rec, "anchor_text": anchor_map[key]}
+            if key in enrichment_map:
+                rec = {**rec, **enrichment_map[key]}
             enriched.append(rec)
 
     logger.info("Anchor text enrichment complete: %d links updated", len(enriched))

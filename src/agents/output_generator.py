@@ -192,8 +192,9 @@ def export_csv(
 
     # Select and order columns for the export
     export_cols = [
-        "source_url", "target_url", "anchor_text", "link_type",
-        "priority", "reason", "silo_name", "implementation_status",
+        "source_url", "target_url", "anchor_text",
+        "placement_hint", "copy_snippet",
+        "link_type", "priority", "silo_name", "implementation_status",
     ]
     available_cols = [c for c in export_cols if c in recommendations_df.columns]
 
@@ -337,7 +338,11 @@ def prepare_supabase_records(
             "money_page_count": silo.get("money_page_count", 0),
         })
 
-    rec_cols = ["id", "source_url", "target_url", "anchor_text", "link_type", "priority", "reason", "silo_id", "implementation_status"]
+    rec_cols = [
+        "id", "source_url", "target_url", "anchor_text",
+        "placement_hint", "copy_snippet",
+        "link_type", "priority", "reason", "silo_id", "implementation_status",
+    ]
     rec_cols = [c for c in rec_cols if c in recommendations_df.columns]
     rec_records = recommendations_df[rec_cols].to_dict("records") if not recommendations_df.empty else []
 

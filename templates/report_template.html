@@ -77,6 +77,15 @@
     .anchor-text { font-style: italic; color: var(--green); }
     .reason-text { color: var(--text-muted); font-size: 12px; }
 
+    /* Placement hint + copy snippet */
+    .placement-hint { font-size: 12px; color: var(--gold); margin-bottom: 4px; }
+    .placement-hint::before { content: "📍 "; }
+    .copy-snippet-wrap { position: relative; margin-top: 4px; }
+    .copy-snippet { display: block; background: var(--surface2); border: 1px solid var(--border); border-radius: 5px; padding: 6px 36px 6px 8px; font-family: inherit; font-size: 12px; color: var(--text); white-space: pre-wrap; word-break: break-word; cursor: default; }
+    .copy-btn { position: absolute; top: 4px; right: 4px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; font-size: 10px; color: var(--text-muted); cursor: pointer; }
+    .copy-btn:hover { border-color: var(--green); color: var(--green); }
+    .copy-btn.copied { color: var(--green); border-color: var(--green); }
+
     /* Clusters section */
     .cluster-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
     .cluster-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
@@ -201,15 +210,22 @@
         {% if page.incoming_links %}
         <div class="subsection-title">Incoming Links — pages that should link TO this page</div>
         <table class="link-table">
-          <thead><tr><th>Source Page</th><th>Anchor Text</th><th>Type</th><th>Priority</th><th>Reason</th></tr></thead>
+          <thead><tr><th style="width:30%">Source Page</th><th style="width:6%">Pri.</th><th style="width:18%">Anchor Text</th><th style="width:46%">Placement Hint &amp; Copy Snippet</th></tr></thead>
           <tbody>
           {% for link in page.incoming_links %}
           <tr>
             <td><a href="{{ link.source_url }}" target="_blank">{{ link.source_url | truncate(55) }}</a></td>
-            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
-            <td>{{ link.link_type }}</td>
             <td><span class="badge badge-p{{ link.priority }}">P{{ link.priority }}</span></td>
-            <td class="reason-text">{{ link.reason }}</td>
+            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
+            <td>
+              {% if link.placement_hint %}<div class="placement-hint">{{ link.placement_hint }}</div>{% endif %}
+              {% if link.copy_snippet %}
+              <div class="copy-snippet-wrap">
+                <span class="copy-snippet">{{ link.copy_snippet }}</span>
+                <button class="copy-btn" onclick="copySnippet(this, event)">Copy</button>
+              </div>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           </tbody>
@@ -219,17 +235,24 @@
         {% endif %}
 
         {% if page.outgoing_links %}
-        <div class="subsection-title" style="margin-top:16px">Outgoing Links — pages this page should link TO</div>
+        <div class="subsection-title" style="margin-top:16px">Outgoing Links — links to add ON THIS PAGE</div>
         <table class="link-table">
-          <thead><tr><th>Target Page</th><th>Anchor Text</th><th>Type</th><th>Priority</th><th>Reason</th></tr></thead>
+          <thead><tr><th style="width:30%">Target Page</th><th style="width:6%">Pri.</th><th style="width:18%">Anchor Text</th><th style="width:46%">Placement Hint &amp; Copy Snippet</th></tr></thead>
           <tbody>
           {% for link in page.outgoing_links %}
           <tr>
             <td><a href="{{ link.target_url }}" target="_blank">{{ link.target_url | truncate(55) }}</a></td>
-            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
-            <td>{{ link.link_type }}</td>
             <td><span class="badge badge-p{{ link.priority }}">P{{ link.priority }}</span></td>
-            <td class="reason-text">{{ link.reason }}</td>
+            <td><span class="anchor-text">"{{ link.anchor_text }}"</span></td>
+            <td>
+              {% if link.placement_hint %}<div class="placement-hint">{{ link.placement_hint }}</div>{% endif %}
+              {% if link.copy_snippet %}
+              <div class="copy-snippet-wrap">
+                <span class="copy-snippet">{{ link.copy_snippet }}</span>
+                <button class="copy-btn" onclick="copySnippet(this, event)">Copy</button>
+              </div>
+              {% endif %}
+            </td>
           </tr>
           {% endfor %}
           </tbody>
@@ -241,7 +264,13 @@
           <div class="money-label">Revenue Connection</div>
           <div>Link to: <a href="{{ page.money_page_rec.target_url }}" target="_blank">{{ page.money_page_rec.target_url }}</a></div>
           <div>Anchor: <span class="anchor-text">"{{ page.money_page_rec.anchor_text }}"</span></div>
-          <div class="reason-text">{{ page.money_page_rec.reason }}</div>
+          {% if page.money_page_rec.placement_hint %}<div class="placement-hint" style="margin-top:6px">{{ page.money_page_rec.placement_hint }}</div>{% endif %}
+          {% if page.money_page_rec.copy_snippet %}
+          <div class="copy-snippet-wrap" style="margin-top:4px">
+            <span class="copy-snippet">{{ page.money_page_rec.copy_snippet }}</span>
+            <button class="copy-btn" onclick="copySnippet(this, event)">Copy</button>
+          </div>
+          {% endif %}
         </div>
         {% endif %}
 
@@ -292,6 +321,15 @@ function collapseAll() {
 function filterType(type) {
   document.querySelectorAll('.page-card').forEach(c => {
     c.style.display = (!type || c.dataset.type === type) ? 'block' : 'none';
+  });
+}
+function copySnippet(btn, e) {
+  e.stopPropagation();
+  const text = btn.previousElementSibling.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
   });
 }
 </script>
