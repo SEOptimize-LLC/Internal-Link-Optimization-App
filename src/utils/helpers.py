@@ -1,3 +1,4 @@
+import fnmatch
 import re
 import uuid
 from datetime import datetime
@@ -83,3 +84,41 @@ def format_pct(value: float) -> str:
 def format_number(value: float) -> str:
     """Format a number with comma separators."""
     return f"{int(value):,}"
+
+
+def parse_exclusion_patterns(text: str) -> list[str]:
+    """
+    Parse newline-separated URL exclusion patterns from a text field.
+    Skips blank lines and comment lines (starting with #).
+    """
+    patterns = []
+    for line in text.splitlines():
+        p = line.strip()
+        if p and not p.startswith("#"):
+            patterns.append(p)
+    return patterns
+
+
+def url_matches_exclusions(url: str, patterns: list[str]) -> bool:
+    """
+    Return True if the URL matches any exclusion pattern.
+
+    Each pattern is tried as a regex first; if the pattern is not valid
+    regex (e.g. bare wildcards like ``/jobs/*``), it falls back to
+    fnmatch glob matching (case-insensitive).
+
+    Examples that work out of the box:
+      - ``https://example.com/jobs/*``      → glob wildcard
+      - ``/appointment/.*``                 → regex substring match
+      - ``.*\\.webp$``                      → regex suffix match
+      - ``/fr_ca/``                         → regex substring match
+    """
+    for pattern in patterns:
+        try:
+            if re.search(pattern, url):
+                return True
+        except re.error:
+            # Not valid regex — treat as glob wildcard
+            if fnmatch.fnmatch(url.lower(), pattern.lower()):
+                return True
+    return False

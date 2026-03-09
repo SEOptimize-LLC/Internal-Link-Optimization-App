@@ -296,9 +296,11 @@ def cluster_keywords(
     # ── DataForSEO enrichment (optional) ────────────────────────────────────
     keyword_metrics: dict[str, dict] = {}
     try:
-        from src.utils.dataforseo import fetch_keyword_metrics
-        from src.config.settings import DATAFORSEO_LOGIN
-        if DATAFORSEO_LOGIN:
+        from src.utils.dataforseo import (
+            _get_credentials,
+            fetch_keyword_metrics,
+        )
+        if _get_credentials()[0]:
             _progress(
                 f"Fetching search volume + keyword difficulty for "
                 f"{len(unique_queries):,} queries via DataForSEO..."

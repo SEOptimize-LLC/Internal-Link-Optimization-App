@@ -11,6 +11,37 @@ logger = logging.getLogger(__name__)
 
 DATAFORSEO_BASE_URL = "https://api.dataforseo.com/v3"
 
+
+def _get_credentials() -> tuple[str, str]:
+    """
+    Resolve DataForSEO credentials at call time.
+
+    Priority:
+    1. st.secrets flat keys:       DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD
+    2. st.secrets nested section:  [dataforseo] login / password
+    3. Module-level constants:     read from environment variables at import time
+
+    Supports all Streamlit Cloud secrets formats and local .env files.
+    """
+    login = DATAFORSEO_LOGIN
+    password = DATAFORSEO_PASSWORD
+    try:
+        import streamlit as st
+        if not login:
+            login = st.secrets.get("DATAFORSEO_LOGIN", "")
+        if not password:
+            password = st.secrets.get("DATAFORSEO_PASSWORD", "")
+        # Try nested [dataforseo] section
+        if not login or not password:
+            dfs = st.secrets.get("dataforseo", {})
+            if not login:
+                login = dfs.get("login", "")
+            if not password:
+                password = dfs.get("password", "")
+    except Exception:
+        pass
+    return login, password
+
 # Common location codes for the UI selector
 LOCATION_OPTIONS = {
     "United States": 2840,
@@ -31,7 +62,8 @@ LOCATION_OPTIONS = {
 
 
 def _auth_header() -> dict:
-    token = base64.b64encode(f"{DATAFORSEO_LOGIN}:{DATAFORSEO_PASSWORD}".encode()).decode()
+    login, password = _get_credentials()
+    token = base64.b64encode(f"{login}:{password}".encode()).decode()
     return {"Authorization": f"Basic {token}", "Content-Type": "application/json"}
 
 
@@ -82,7 +114,8 @@ def fetch_keyword_metrics(
         Dict mapping keyword (lowercase) → {search_volume, competition, cpc, keyword_difficulty}
         Returns empty dict if credentials are not configured or all calls fail.
     """
-    if not DATAFORSEO_LOGIN or not DATAFORSEO_PASSWORD:
+    login, password = _get_credentials()
+    if not login or not password:
         logger.info("DataForSEO credentials not configured — skipping keyword metrics enrichment")
         return {}
 

@@ -97,6 +97,7 @@ def _init_state():
         "html_report_path": None,
         "silo_fig": None,
         "error": None,
+        "_url_exclusions": "",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -370,6 +371,34 @@ if st.session_state.step == "setup":
 
     st.divider()
 
+    # ── URL Exclusions ──────────────────────────────────────────────────────
+    st.subheader("5. URL Exclusions (Optional)")
+    st.caption(
+        "Paste URLs or patterns to exclude from analysis — one per line. "
+        "Supports wildcards (e.g. ``/jobs/*``) and regex "
+        "(e.g. ``/appointment/.*``). "
+        "Useful for removing appointment pages, careers sections, "
+        "locale folders, legal pages, and non-content assets."
+    )
+    url_exclusions_text = st.text_area(
+        "Exclusion patterns",
+        placeholder=(
+            "https://www.example.com/jobs/*\n"
+            "/appointment/.*\n"
+            "/fr_ca/\n"
+            ".*\\.webp$\n"
+            "# Lines starting with # are ignored"
+        ),
+        height=130,
+        help=(
+            "One pattern per line. "
+            "Regex patterns are matched anywhere in the URL. "
+            "Glob patterns (using * or ?) use case-insensitive matching."
+        ),
+    )
+
+    st.divider()
+
     # Validate and run
     can_run = bool(
         client_name
@@ -400,6 +429,7 @@ if st.session_state.step == "setup":
         st.session_state._filter_branded = filter_branded
         st.session_state.location_code = location_code
         st.session_state.language_code = language_code
+        st.session_state._url_exclusions = url_exclusions_text
         st.session_state.step = "running"
         st.rerun()
 
@@ -441,7 +471,11 @@ elif st.session_state.step == "running":
         _openrouter.MODEL_REASONING = st.session_state.selected_model
         _openrouter.MODEL_FAST = st.session_state.selected_model
 
-        from src.utils.helpers import generate_run_id
+        from src.utils.helpers import (
+            generate_run_id,
+            parse_exclusion_patterns,
+            url_matches_exclusions,
+        )
         from src.utils.document_parser import parse_document
         from src.agents.gsc_fetcher import fetch_gsc_data
         from src.agents.profile_parser import parse_business_profile
@@ -465,7 +499,10 @@ elif st.session_state.step == "running":
         if st.session_state.queries_df is not None:
             queries_df = st.session_state.queries_df
             pages_df = st.session_state.pages_df
-            update_step(1, "done", f"{len(queries_df):,} queries · {len(pages_df):,} pages")
+            update_step(
+                1, "done",
+                f"{len(queries_df):,} queries · {len(pages_df):,} pages",
+            )
         else:
             update_step(1, "running")
             queries_df, pages_df = fetch_gsc_data(
@@ -475,9 +512,29 @@ elif st.session_state.step == "running":
                 filter_branded=st.session_state._filter_branded,
                 progress_callback=lambda msg: status_text.caption(msg),
             )
+
+            # Apply URL exclusions before caching
+            exclusion_patterns = parse_exclusion_patterns(
+                st.session_state._url_exclusions or ""
+            )
+            if exclusion_patterns:
+                pages_mask = pages_df["url"].apply(
+                    lambda u: url_matches_exclusions(u, exclusion_patterns)
+                )
+                queries_mask = queries_df["page"].apply(
+                    lambda u: url_matches_exclusions(u, exclusion_patterns)
+                )
+                excluded = int(pages_mask.sum())
+                pages_df = pages_df[~pages_mask].reset_index(drop=True)
+                queries_df = queries_df[~queries_mask].reset_index(drop=True)
+                logger.info("URL exclusions: removed %d pages", excluded)
+
             st.session_state.queries_df = queries_df
             st.session_state.pages_df = pages_df
-            update_step(1, "done", f"{len(queries_df):,} queries · {len(pages_df):,} pages")
+            update_step(
+                1, "done",
+                f"{len(queries_df):,} queries · {len(pages_df):,} pages",
+            )
 
         # ── Step 2: Business Profile ──────────────────────────────────────────
         if st.session_state.profile is not None:
