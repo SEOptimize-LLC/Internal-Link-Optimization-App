@@ -1,11 +1,12 @@
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 import pandas as pd
 
 from src.agents.profile_parser import BusinessProfile
-from src.config.settings import MODEL_REASONING
+from src.config.settings import MAX_PARALLEL_WORKERS, MODEL_REASONING
 from src.utils.helpers import chunk_list, truncate_url
 from src.utils.openrouter import chat_completion
 
@@ -248,17 +249,25 @@ def _generate_blog_to_money_links(
     # Batch content pages
     content_page_list = content_pages[["url", "cluster_label"]].to_dict("records")
     batches = chunk_list(content_page_list, 20)
-    _progress(f"Generating blog→money page links for {len(content_page_list)} content pages...")
 
-    all_recommendations = []
+    # Build URL→silo lookup once (was rebuilt on every loop iteration)
+    url_to_silo: dict[str, str] = {}
+    url_to_silo_name: dict[str, str] = {}
+    for silo_id, silo in silo_structure.items():
+        for url in silo.get("cluster_post_urls", []) + [
+            silo.get("pillar_url", "")
+        ]:
+            if url:
+                url_to_silo[url] = silo_id
+                url_to_silo_name[url] = silo.get("silo_name", "")
 
-    for i, batch in enumerate(batches):
-        _progress(f"Blog→money links batch {i + 1}/{len(batches)}...")
+    money_pages_set = set(money_pages)
 
+    def _process_batch(batch: list[dict]) -> list[dict]:
         content_pages_str = "\n".join(
-            f"- {p['url']} (topic: {p.get('cluster_label', 'general')})" for p in batch
+            f"- {p['url']} (topic: {p.get('cluster_label', 'general')})"
+            for p in batch
         )
-
         messages = [
             {"role": "system", "content": MONEY_PAGE_LINK_PROMPT},
             {
@@ -270,41 +279,51 @@ def _generate_blog_to_money_links(
                 ),
             },
         ]
-
         result = chat_completion(
             messages=messages,
             model=MODEL_REASONING,
             response_format="json",
             temperature=0.2,
         )
-
-        # Build URL to silo lookup
-        url_to_silo = {}
-        url_to_silo_name = {}
-        for silo_id, silo in silo_structure.items():
-            for url in silo.get("cluster_post_urls", []) + [silo.get("pillar_url", "")]:
-                if url:
-                    url_to_silo[url] = silo_id
-                    url_to_silo_name[url] = silo.get("silo_name", "")
-
+        recs = []
         for rec in result.get("recommendations", []):
             source = rec.get("source_url", "")
             target = rec.get("target_url", "")
-            if source and target and target in money_pages:
-                all_recommendations.append({
+            if source and target and target in money_pages_set:
+                recs.append({
                     "id": str(uuid.uuid4()),
                     "source_url": source,
                     "target_url": target,
                     "anchor_text": rec.get("anchor_text", ""),
                     "link_type": "blog_to_money",
                     "priority": 3,
-                    "reason": rec.get("reasoning", "Blog post links to relevant service/product page"),
+                    "reason": rec.get(
+                        "reasoning",
+                        "Blog post links to relevant service/product page",
+                    ),
                     "silo_id": url_to_silo.get(source, ""),
                     "silo_name": url_to_silo_name.get(source, ""),
                     "implementation_status": "pending",
                 })
+        return recs
 
-    logger.info("Generated %d P3 blog→money page link recommendations", len(all_recommendations))
+    _progress(
+        f"Generating blog→money page links for "
+        f"{len(content_page_list)} content pages in parallel..."
+    )
+    all_recommendations: list[dict] = []
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = [executor.submit(_process_batch, b) for b in batches]
+        for future in as_completed(futures):
+            try:
+                all_recommendations.extend(future.result())
+            except Exception as e:
+                logger.warning("Blog→money links batch failed: %s", e)
+
+    logger.info(
+        "Generated %d P3 blog→money page link recommendations",
+        len(all_recommendations),
+    )
     return all_recommendations
 
 
@@ -396,34 +415,33 @@ def _enrich_anchor_texts(
 
     business_context = profile.to_context_string()
     batches = chunk_list(recommendations, 25)
-    enriched: list[dict] = []
 
-    for i, batch in enumerate(batches):
-        if progress_callback:
-            progress_callback(f"Generating contextual anchor text: batch {i + 1}/{len(batches)}...")
-
+    def _process_anchor_batch(
+        idx_batch: tuple,
+    ) -> tuple[int, list[dict], dict]:
+        idx, batch = idx_batch
         pairs_text = []
         for j, rec in enumerate(batch, 1):
             src_cid = url_to_cluster_id.get(rec["source_url"], "")
             tgt_cid = url_to_cluster_id.get(rec["target_url"], "")
             src_cluster = clusters.get(src_cid, {})
             tgt_cluster = clusters.get(tgt_cid, {})
-
             src_label = src_cluster.get("label", rec.get("silo_name", ""))
             tgt_label = tgt_cluster.get("label", rec.get("silo_name", ""))
             src_queries = ", ".join(src_cluster.get("queries", [])[:3])
             tgt_queries = ", ".join(tgt_cluster.get("queries", [])[:3])
-
-            src_context = f"{src_label}" + (f" (e.g. {src_queries})" if src_queries else "")
-            tgt_context = f"{tgt_label}" + (f" (e.g. {tgt_queries})" if tgt_queries else "")
-
+            src_context = src_label + (
+                f" (e.g. {src_queries})" if src_queries else ""
+            )
+            tgt_context = tgt_label + (
+                f" (e.g. {tgt_queries})" if tgt_queries else ""
+            )
             pairs_text.append(
                 f"{j}. source_url: {rec['source_url']}\n"
                 f"   source_topic: {src_context}\n"
                 f"   target_url: {rec['target_url']}\n"
                 f"   target_topic: {tgt_context}"
             )
-
         messages = [
             {"role": "system", "content": ANCHOR_TEXT_SYSTEM_PROMPT},
             {
@@ -435,23 +453,51 @@ def _enrich_anchor_texts(
                 ),
             },
         ]
-
-        try:
-            result = chat_completion(
-                messages=messages,
-                use_fast_model=True,
-                response_format="json",
-                temperature=0.2,
+        result = chat_completion(
+            messages=messages,
+            use_fast_model=True,
+            response_format="json",
+            temperature=0.2,
+        )
+        anchor_map = {
+            (a["source_url"], a["target_url"]): a["anchor_text"]
+            for a in result.get("anchors", [])
+            if (
+                a.get("source_url")
+                and a.get("target_url")
+                and a.get("anchor_text")
             )
-            anchor_map = {
-                (a["source_url"], a["target_url"]): a["anchor_text"]
-                for a in result.get("anchors", [])
-                if a.get("source_url") and a.get("target_url") and a.get("anchor_text")
-            }
-        except Exception as e:
-            logger.warning("Anchor text enrichment batch %d failed: %s", i + 1, e)
-            anchor_map = {}
+        }
+        return idx, batch, anchor_map
 
+    if progress_callback:
+        progress_callback(
+            f"Generating contextual anchor text for "
+            f"{len(recommendations)} links in parallel..."
+        )
+
+    batch_results: list = [None] * len(batches)
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {
+            executor.submit(_process_anchor_batch, (i, batch)): i
+            for i, batch in enumerate(batches)
+        }
+        for future in as_completed(futures):
+            try:
+                idx, batch, anchor_map = future.result()
+                batch_results[idx] = (batch, anchor_map)
+            except Exception as e:
+                idx = futures[future]
+                logger.warning(
+                    "Anchor text enrichment batch %d failed: %s", idx + 1, e
+                )
+                batch_results[idx] = (batches[idx], {})
+
+    enriched: list[dict] = []
+    for item in batch_results:
+        if item is None:
+            continue
+        batch, anchor_map = item
         for rec in batch:
             key = (rec["source_url"], rec["target_url"])
             if key in anchor_map:

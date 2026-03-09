@@ -1,11 +1,15 @@
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 import pandas as pd
 
 from src.agents.profile_parser import BusinessProfile
-from src.config.settings import MAX_QUERIES_PER_CLUSTER_BATCH
+from src.config.settings import (
+    MAX_PARALLEL_WORKERS,
+    MAX_QUERIES_PER_CLUSTER_BATCH,
+)
 from src.utils.helpers import chunk_list, deduplicate_queries
 from src.utils.openrouter import chat_completion
 
@@ -300,12 +304,25 @@ def cluster_keywords(
                 f"{len(unique_queries):,} queries via DataForSEO..."
             )
             keyword_metrics = fetch_keyword_metrics(
-                unique_queries, location_code=location_code, language_code=language_code
+                unique_queries,
+                location_code=location_code,
+                language_code=language_code,
             )
-            found = sum(1 for k in unique_queries if k.lower() in keyword_metrics)
-            _progress(f"DataForSEO: metrics found for {found:,}/{len(unique_queries):,} queries")
+            found = sum(
+                1 for k in unique_queries if k.lower() in keyword_metrics
+            )
+            _progress(
+                f"DataForSEO: metrics found for "
+                f"{found:,}/{len(unique_queries):,} queries"
+            )
+        else:
+            _progress(
+                "DataForSEO credentials not configured — "
+                "keyword metrics will not be available"
+            )
     except Exception as e:
         logger.warning("DataForSEO enrichment skipped: %s", e)
+        _progress(f"DataForSEO enrichment skipped: {e}")
 
     # Sort queries: highest search_volume first (fall back to GSC impressions order)
     if keyword_metrics:
@@ -331,11 +348,31 @@ def cluster_keywords(
         global_target, per_batch_target, num_batches,
     )
 
-    all_batch_clusters = []
-    for i, batch in enumerate(batches):
-        _progress(f"Clustering batch {i + 1}/{len(batches)} ({len(batch)} queries)...")
-        batch_clusters = _cluster_batch(batch, business_context, i, per_batch_target)
-        all_batch_clusters.append(batch_clusters)
+    all_batch_clusters: list = [None] * len(batches)
+    _progress(
+        f"Clustering {len(batches)} batch(es) in parallel "
+        f"({MAX_PARALLEL_WORKERS} workers)..."
+    )
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        future_to_idx = {
+            executor.submit(
+                _cluster_batch, batch, business_context, i, per_batch_target
+            ): i
+            for i, batch in enumerate(batches)
+        }
+        completed = 0
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                all_batch_clusters[idx] = future.result()
+            except Exception as e:
+                logger.warning("Clustering batch %d failed: %s", idx + 1, e)
+                all_batch_clusters[idx] = []
+            completed += 1
+            _progress(
+                f"Clustering: {completed}/{len(batches)} batches complete..."
+            )
+    all_batch_clusters = [c for c in all_batch_clusters if c is not None]
 
     # Merge clusters from batches
     raw_clusters = _merge_cross_batch_clusters(

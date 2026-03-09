@@ -1,11 +1,16 @@
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
 
 import pandas as pd
 
 from src.agents.profile_parser import BusinessProfile
-from src.config.settings import MAX_PAGES_PER_BATCH, MODEL_REASONING
+from src.config.settings import (
+    MAX_PAGES_PER_BATCH,
+    MAX_PARALLEL_WORKERS,
+    MODEL_REASONING,
+)
 from src.utils.helpers import chunk_list, get_url_path
 from src.utils.openrouter import chat_completion
 
@@ -163,12 +168,30 @@ def categorize_content(
     _progress(f"Classifying {len(pages_for_classification):,} pages in {len(batches)} batch(es)...")
 
     all_classifications: dict[str, dict] = {}
-    for i, batch in enumerate(batches):
-        _progress(f"Classifying batch {i + 1}/{len(batches)} ({len(batch)} pages)...")
-        classified = _classify_page_batch(batch, business_context, clusters_summary)
-        for item in classified:
-            if item.get("url"):
-                all_classifications[item["url"]] = item
+    _progress(
+        f"Classifying {len(batches)} batch(es) in parallel "
+        f"({MAX_PARALLEL_WORKERS} workers)..."
+    )
+    with ThreadPoolExecutor(max_workers=MAX_PARALLEL_WORKERS) as executor:
+        futures = {
+            executor.submit(
+                _classify_page_batch, batch, business_context, clusters_summary
+            ): batch
+            for batch in batches
+        }
+        completed = 0
+        for future in as_completed(futures):
+            try:
+                classified = future.result()
+                for item in classified:
+                    if item.get("url"):
+                        all_classifications[item["url"]] = item
+            except Exception as e:
+                logger.warning("Page classification batch failed: %s", e)
+            completed += 1
+            _progress(
+                f"Classifying: {completed}/{len(batches)} batches complete..."
+            )
 
     # Build taxonomy DataFrame
     taxonomy_records = []
