@@ -16,31 +16,49 @@ def _get_credentials() -> tuple[str, str]:
     """
     Resolve DataForSEO credentials at call time.
 
-    Priority:
-    1. st.secrets flat keys:       DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD
-    2. st.secrets nested section:  [dataforseo] login / password
-    3. Module-level constants:     read from environment variables at import time
+    Priority order (first non-empty value wins):
+    1. st.secrets["dataforseo"]["login/password"]  — nested section
+    2. st.secrets["DATAFORSEO_LOGIN/PASSWORD"]     — flat top-level keys
+    3. Environment variables / .env file           — local development
 
-    Supports all Streamlit Cloud secrets formats and local .env files.
+    Each lookup is independent so a missing key never silences the others.
     """
     login = DATAFORSEO_LOGIN
     password = DATAFORSEO_PASSWORD
+
     try:
         import streamlit as st
+
+        # 1. Nested [dataforseo] section — matches the pattern used by the
+        #    companion Fetch-Data-For-SEO app that is confirmed working
         if not login:
-            login = st.secrets.get("DATAFORSEO_LOGIN", "")
+            try:
+                login = st.secrets["dataforseo"]["login"]
+            except (KeyError, AttributeError):
+                pass
         if not password:
-            password = st.secrets.get("DATAFORSEO_PASSWORD", "")
-        # Try nested [dataforseo] section
-        if not login or not password:
-            dfs = st.secrets.get("dataforseo", {})
-            if not login:
-                login = dfs.get("login", "")
-            if not password:
-                password = dfs.get("password", "")
+            try:
+                password = st.secrets["dataforseo"]["password"]
+            except (KeyError, AttributeError):
+                pass
+
+        # 2. Flat top-level keys (alternative secrets format)
+        if not login:
+            try:
+                login = st.secrets["DATAFORSEO_LOGIN"]
+            except (KeyError, AttributeError):
+                pass
+        if not password:
+            try:
+                password = st.secrets["DATAFORSEO_PASSWORD"]
+            except (KeyError, AttributeError):
+                pass
+
     except Exception:
         pass
+
     return login, password
+
 
 # Common location codes for the UI selector
 LOCATION_OPTIONS = {
