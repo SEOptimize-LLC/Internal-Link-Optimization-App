@@ -7,8 +7,9 @@ import pandas as pd
 
 from src.agents.profile_parser import BusinessProfile
 from src.config.settings import MAX_PARALLEL_WORKERS, MODEL_REASONING
-from src.utils.helpers import chunk_list, truncate_url
+from src.utils.helpers import chunk_list
 from src.utils.openrouter import chat_completion
+from src.utils.page_fetcher import fetch_pages_parallel
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +70,20 @@ Rules:
 
 LINK_ENRICHMENT_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in contextual internal linking.
 
-For each source→target page pair, generate:
-1. Natural anchor text (3-7 words) that fits the source page context and describes the target
-2. A placement hint: brief note on WHERE in the source page to add the link
-3. A copy snippet: 1-2 sentences with the anchor embedded as [anchor text]() for copy-paste
+For each source→target page pair, generate anchor text, a placement hint, and a copy snippet.
+
+WHEN source_content IS provided (pair marked [content provided]):
+- placement_hint: quote the first 12-18 words of the most relevant existing paragraph
+  where the anchor fits naturally. The editor will use this exact quote to Ctrl+F the
+  paragraph on their page — so it must be verbatim from the content.
+- copy_snippet: rewrite THAT SPECIFIC paragraph or sentence with [anchor text]()
+  naturally embedded. This is a drop-in replacement the editor can copy-paste directly.
+
+WHEN source_content is NOT provided (pair marked [no content]):
+- placement_hint: describe the section or sentence where the link fits best
+  (e.g. "In the intro when comparing ERP options", "Near the conclusion on software choice")
+- copy_snippet: write a plausible 1-2 sentence passage for that context with
+  [anchor text]() embedded
 
 Return a JSON object:
 {
@@ -81,19 +92,17 @@ Return a JSON object:
       "source_url": "...",
       "target_url": "...",
       "anchor_text": "natural contextual anchor text here",
-      "placement_hint": "e.g. 'In the intro when discussing X', 'Near the comparison of Y vs Z'",
-      "copy_snippet": "Sentence with [anchor text]() embedded naturally so the editor can copy-paste"
+      "placement_hint": "Verbatim opening of the target paragraph OR section description",
+      "copy_snippet": "Full rewritten sentence/paragraph with [anchor text]() embedded"
     }
   ]
 }
 
 Rules:
-- anchor_text: never use generic phrases like "click here", "learn more", "read this"
+- anchor_text: 3-7 words; never use "click here", "learn more", "read this"
 - anchor_text must reflect the target page's specific topic
-- placement_hint: be specific about the section or moment (intro, a named topic,
-  conclusion, related resources block, etc.)
-- copy_snippet: write as if you are the content editor; use [anchor text]() as the
-  hyperlink placeholder; keep it 1-2 sentences; make it sound natural on the source page
+- placement_hint (with content): copy the first 12-18 words verbatim so Ctrl+F works
+- copy_snippet: complete replacement text with [anchor text]() as hyperlink placeholder
 - One entry per source→target pair
 """
 
@@ -446,12 +455,53 @@ def _enrich_anchor_texts(
                 url_to_cluster_id[row["url"]] = str(row["cluster_id"])
 
     business_context = profile.to_context_string()
+
+    # ── Pre-fetch source page content in parallel ──────────────────────────
+    unique_source_urls = list(
+        dict.fromkeys(r["source_url"] for r in recommendations)
+    )
+    if progress_callback:
+        progress_callback(
+            f"Fetching content from {len(unique_source_urls)} source pages..."
+        )
+    page_content_map = fetch_pages_parallel(
+        unique_source_urls, max_workers=10
+    )
+    logger.info(
+        "Source page content available for %d/%d URLs",
+        len(page_content_map),
+        len(unique_source_urls),
+    )
+
     batches = chunk_list(recommendations, 25)
 
     def _process_anchor_batch(
         idx_batch: tuple,
     ) -> tuple[int, list[dict], dict]:
         idx, batch = idx_batch
+
+        # Build deduplicated source-content block for this batch
+        batch_sources = list(
+            dict.fromkeys(r["source_url"] for r in batch)
+        )
+        content_lines = []
+        has_any_content = False
+        for url in batch_sources:
+            content = page_content_map.get(url, "")
+            if content:
+                has_any_content = True
+                content_lines.append(
+                    f"URL: {url}\nCONTENT:\n{content}"
+                )
+
+        content_section = ""
+        if has_any_content:
+            content_section = (
+                "Source page content (ground placement hints in this text):\n\n"
+                + "\n---\n".join(content_lines)
+                + "\n\n"
+            )
+
         pairs_text = []
         for j, rec in enumerate(batch, 1):
             src_cid = url_to_cluster_id.get(rec["source_url"], "")
@@ -468,8 +518,13 @@ def _enrich_anchor_texts(
             tgt_context = tgt_label + (
                 f" (e.g. {tgt_queries})" if tgt_queries else ""
             )
+            has_content = rec["source_url"] in page_content_map
+            content_tag = (
+                "[content provided above]"
+                if has_content else "[no content — infer from URL/topic]"
+            )
             pairs_text.append(
-                f"{j}. source_url: {rec['source_url']}\n"
+                f"{j}. source_url: {rec['source_url']} {content_tag}\n"
                 f"   source_topic: {src_context}\n"
                 f"   target_url: {rec['target_url']}\n"
                 f"   target_topic: {tgt_context}"
@@ -480,8 +535,9 @@ def _enrich_anchor_texts(
                 "role": "user",
                 "content": (
                     f"Business context: {business_context}\n\n"
-                    f"Generate anchor text, placement hint, and copy snippet"
-                    f" for {len(batch)} link pairs:\n\n"
+                    + content_section
+                    + f"Generate anchor text, placement hint, and copy"
+                    f" snippet for {len(batch)} link pairs:\n\n"
                     + "\n\n".join(pairs_text)
                 ),
             },
