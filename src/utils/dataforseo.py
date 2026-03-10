@@ -213,7 +213,17 @@ def fetch_keyword_metrics(
                 }],
             )
             for task in data.get("tasks", []):
-                for item in task.get("result") or []:
+                code = task.get("status_code", 0)
+                if code != 20000:
+                    logger.warning(
+                        "DataForSEO Google Ads SV batch %d/%d task error %d: %s",
+                        i // BATCH + 1, total_sv_batches, code,
+                        task.get("status_message", "unknown"),
+                    )
+                    continue
+                items = task.get("result") or []
+                logger.debug("Google Ads SV batch %d: %d keywords returned", i // BATCH + 1, len(items))
+                for item in items:
                     kw = (item.get("keyword") or "").lower()
                     if kw:
                         google_sv[kw] = item.get("search_volume") or 0
@@ -245,7 +255,17 @@ def fetch_keyword_metrics(
                 }],
             )
             for task in data.get("tasks", []):
-                for item in task.get("result") or []:
+                code = task.get("status_code", 0)
+                if code != 20000:
+                    logger.warning(
+                        "DataForSEO Clickstream SV batch %d/%d task error %d: %s",
+                        i // BATCH + 1, total_cs_batches, code,
+                        task.get("status_message", "unknown"),
+                    )
+                    continue
+                items = task.get("result") or []
+                logger.debug("Clickstream SV batch %d: %d keywords returned", i // BATCH + 1, len(items))
+                for item in items:
                     kw = (item.get("keyword") or "").lower()
                     if kw:
                         clickstream_sv[kw] = item.get("search_volume") or 0
@@ -297,7 +317,17 @@ def fetch_keyword_metrics(
                 [{"keywords": batch, "location_code": location_code, "language_code": language_code}],
             )
             for task in data.get("tasks", []):
-                for item in task.get("result") or []:
+                code = task.get("status_code", 0)
+                if code != 20000:
+                    logger.warning(
+                        "DataForSEO KD batch %d/%d task error %d: %s",
+                        i // KD_BATCH + 1, total_kd_batches, code,
+                        task.get("status_message", "unknown"),
+                    )
+                    continue
+                items = task.get("result") or []
+                logger.debug("KD batch %d: %d keywords returned", i // KD_BATCH + 1, len(items))
+                for item in items:
                     kw = (item.get("keyword") or "").lower()
                     kd = item.get("keyword_difficulty") or 0
                     if kw:

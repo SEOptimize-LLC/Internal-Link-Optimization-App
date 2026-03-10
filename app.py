@@ -1,3 +1,4 @@
+import io
 import logging
 import os
 from datetime import datetime
@@ -70,6 +71,19 @@ def _get_oauth_config() -> tuple[str, str, str]:
         st.stop()
 
     return client_id, client_secret, redirect_uri
+
+
+# ── Excel download helper ─────────────────────────────────────────────────────
+def _to_excel(df: pd.DataFrame, sheet_name: str = "Sheet1") -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=sheet_name)
+        ws = writer.sheets[sheet_name]
+        ws.freeze_panes = "A2"
+        for col in ws.columns:
+            max_len = max((len(str(cell.value or "")) for cell in col), default=10)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 2, 60)
+    return buf.getvalue()
 
 
 # ── Session state initialization ──────────────────────────────────────────────
@@ -751,9 +765,27 @@ elif st.session_state.step == "results":
             if "All" not in silo_filter:
                 filtered = filtered[filtered["silo_name"].isin(silo_filter)]
 
+            # Download button
+            dl_cols_order = ["priority", "source_url", "target_url", "anchor_text", "link_type", "silo_name", "reason", "placement_hint", "copy_snippet"]
+            dl_cols = [c for c in dl_cols_order if c in filtered.columns]
+            dl_rename = {
+                "priority": "Priority", "source_url": "Source URL", "target_url": "Target URL",
+                "anchor_text": "Anchor Text", "link_type": "Link Type", "silo_name": "SILO",
+                "reason": "Reason", "placement_hint": "Placement Hint", "copy_snippet": "Copy Snippet",
+            }
+            st.download_button(
+                "⬇ Download Excel",
+                data=_to_excel(filtered[dl_cols].rename(columns=dl_rename), sheet_name="Link Recommendations"),
+                file_name=f"{st.session_state.client_name.replace(' ', '_')}_link_recommendations.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+
             display_cols = ["priority", "source_url", "target_url", "anchor_text", "link_type", "silo_name", "reason"]
             display_cols = [c for c in display_cols if c in filtered.columns]
-            st.dataframe(filtered[display_cols].rename(columns={"priority": "P"}), use_container_width=True, height=500)
+            st.dataframe(
+                filtered[display_cols].rename(columns={"priority": "Priority"}),
+                use_container_width=True, height=500, hide_index=True,
+            )
         else:
             st.info("No recommendations generated.")
 
@@ -769,7 +801,18 @@ elif st.session_state.step == "results":
             filtered_tax = page_taxonomy_df[page_taxonomy_df["page_type"].isin(type_filter_tax)]
             display_cols = ["url", "page_type", "cluster_label", "clicks", "impressions", "opportunity_score"]
             display_cols = [c for c in display_cols if c in filtered_tax.columns]
-            st.dataframe(filtered_tax[display_cols].sort_values("clicks", ascending=False), use_container_width=True, height=500)
+            tax_rename = {
+                "url": "URL", "page_type": "Page Type", "cluster_label": "Cluster",
+                "clicks": "Clicks", "impressions": "Impressions", "opportunity_score": "Opportunity Score",
+            }
+            sorted_tax = filtered_tax[display_cols].sort_values("clicks", ascending=False)
+            st.download_button(
+                "⬇ Download Excel",
+                data=_to_excel(sorted_tax.rename(columns=tax_rename), sheet_name="Page Taxonomy"),
+                file_name=f"{st.session_state.client_name.replace(' ', '_')}_page_taxonomy.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            st.dataframe(sorted_tax, use_container_width=True, height=500, hide_index=True)
         else:
             st.info("No page taxonomy data available.")
 
@@ -813,13 +856,21 @@ elif st.session_state.step == "results":
                 "Monthly Searches", ascending=False
             ).reset_index(drop=True)
 
+            # DFS data availability indicator
+            kw_metrics_preview = st.session_state.keyword_metrics or {}
+            dfs_with_sv = sum(1 for v in kw_metrics_preview.values() if v.get("search_volume", 0) > 0)
+            total_cluster_queries = sum(len(c.get("queries", [])) for c in clusters.values())
+            if kw_metrics_preview:
+                st.caption(f"DataForSEO: {dfs_with_sv:,} of {len(kw_metrics_preview):,} fetched keywords have search volume data ({total_cluster_queries:,} total queries in clusters)")
+            else:
+                st.caption("DataForSEO: no keyword metrics available — check credentials and API plan")
+
             # Download button
-            csv_bytes = cluster_summary_df.to_csv(index=False).encode()
             st.download_button(
-                "Download Clusters CSV",
-                data=csv_bytes,
-                file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.csv",
-                mime="text/csv",
+                "⬇ Download Excel",
+                data=_to_excel(cluster_summary_df, sheet_name="Keyword Clusters"),
+                file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
             # Display table (hide Sample Queries column — too wide for table)
