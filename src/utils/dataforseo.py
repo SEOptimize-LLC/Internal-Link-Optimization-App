@@ -76,15 +76,24 @@ def test_connection() -> tuple[bool, str]:
     try:
         data = _post(
             "/keywords_data/google_ads/search_volume/live",
-            [{"keywords": ["test"], "location_code": 2840, "language_code": "en"}],
+            [{"keywords": ["seo"], "location_code": 2840, "language_code": "en"}],
         )
+        result_count = 0
         for task in data.get("tasks", []):
             code = task.get("status_code", 0)
             if code != 20000:
                 return False, (
                     f"API error {code}: {task.get('status_message', 'unknown')}"
                 )
-        return True, "Connected"
+            result_count += len(task.get("result") or [])
+        if result_count == 0:
+            return False, (
+                "API accepted the request (HTTP 200, task 20000) but returned "
+                "zero keyword results — your DFS plan may not include Google Ads "
+                "search volume. Check your subscription at "
+                "app.dataforseo.com/api-dashboard."
+            )
+        return True, f"Connected — got {result_count} keyword result(s)"
     except requests.HTTPError as e:
         resp = e.response
         if resp is not None:
