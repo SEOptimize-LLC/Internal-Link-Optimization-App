@@ -365,6 +365,12 @@ if st.session_state.step == "setup":
                 "environment variables.",
                 icon="⚠️",
             )
+            with st.expander("Debug: visible secret keys"):
+                try:
+                    import streamlit as _st
+                    st.code(str(list(_st.secrets.keys())), language=None)
+                except Exception as _e:
+                    st.code(f"Could not read st.secrets: {_e}", language=None)
 
         location_name = st.selectbox(
             "Target Country",
