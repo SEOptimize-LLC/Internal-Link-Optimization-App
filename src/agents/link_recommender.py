@@ -27,7 +27,7 @@ Return a JSON object:
       "target_url": "the most relevant money page URL",
       "anchor_text": "natural, contextual anchor text (5-8 words)",
       "placement_hint": "Where on the source page to add the link (e.g. 'In the conclusion when summarising options', 'Near the comparison table')",
-      "copy_snippet": "1-2 sentences with [anchor text]() embedded naturally so the editor can copy-paste directly",
+      "copy_snippet": "1-2 sentences with [anchor text](target_url) embedded naturally so the editor can copy-paste directly",
       "reasoning": "why this connection makes business sense"
     }
   ]
@@ -55,7 +55,7 @@ Return a JSON object:
       "source_url": "page that should link to the orphan",
       "anchor_text": "natural anchor text for the link",
       "placement_hint": "Where on the source page to add the link (e.g. 'In the intro when introducing related topics', 'Near the end in a see-also block')",
-      "copy_snippet": "1-2 sentences with [anchor text]() embedded naturally so the editor can copy-paste directly",
+      "copy_snippet": "1-2 sentences with [anchor text](orphan_url) embedded naturally so the editor can copy-paste directly",
       "reasoning": "why this page should link to the orphan"
     }
   ]
@@ -104,7 +104,7 @@ Return a JSON object:
       "target_url": "...",
       "anchor_text": "natural contextual anchor text here",
       "placement_hint": "Verbatim opening of the target paragraph OR section description",
-      "copy_snippet": "Full rewritten sentence/paragraph with [anchor text]() embedded"
+      "copy_snippet": "Full rewritten sentence/paragraph with [anchor text](target_url) embedded"
     }
   ]
 }
