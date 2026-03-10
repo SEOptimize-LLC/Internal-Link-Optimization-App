@@ -353,7 +353,19 @@ if st.session_state.step == "setup":
             "Leave as-is if DataForSEO is not configured."
         )
 
-        from src.utils.dataforseo import LOCATION_OPTIONS
+        from src.utils.dataforseo import LOCATION_OPTIONS, _get_credentials
+        _dfs_login, _ = _get_credentials()
+        if _dfs_login:
+            st.success("DataForSEO credentials found ✓", icon="✅")
+        else:
+            st.warning(
+                "DataForSEO credentials not found — keyword metrics will be skipped. "
+                "Add `login` and `password` under a `[dataforseo]` section in "
+                "Streamlit secrets, or set `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` "
+                "environment variables.",
+                icon="⚠️",
+            )
+
         location_name = st.selectbox(
             "Target Country",
             options=list(LOCATION_OPTIONS.keys()),

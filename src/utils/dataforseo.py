@@ -54,9 +54,14 @@ def _get_credentials() -> tuple[str, str]:
             except (KeyError, AttributeError):
                 pass
 
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("DataForSEO: unexpected error reading st.secrets: %s", e)
 
+    logger.debug(
+        "DataForSEO credentials resolved: login=%s password=%s",
+        "✓" if login else "✗",
+        "✓" if password else "✗",
+    )
     return login, password
 
 
@@ -134,7 +139,11 @@ def fetch_keyword_metrics(
     """
     login, password = _get_credentials()
     if not login or not password:
-        logger.info("DataForSEO credentials not configured — skipping keyword metrics enrichment")
+        logger.warning(
+            "DataForSEO credentials not configured — skipping keyword metrics. "
+            "Add DATAFORSEO_LOGIN / DATAFORSEO_PASSWORD to .env or "
+            "Streamlit secrets [dataforseo] section."
+        )
         return {}
 
     if not keywords:

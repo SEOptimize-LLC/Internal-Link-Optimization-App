@@ -2,6 +2,7 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
+from urllib.parse import urlparse
 
 import pandas as pd
 
@@ -98,12 +99,18 @@ Return a JSON object:
   ]
 }
 
-Rules:
-- anchor_text: 3-7 words; never use "click here", "learn more", "read this"
-- anchor_text must reflect the target page's specific topic
-- placement_hint (with content): copy the first 12-18 words verbatim so Ctrl+F works
-- copy_snippet: complete replacement text with [anchor text]() as hyperlink placeholder
-- One entry per source→target pair
+CRITICAL UNIQUENESS RULES — read carefully:
+- NEVER generate the same anchor_text twice in this batch — even if two pairs share the same
+  source URL or the same cluster theme.
+- anchor_text describes the TARGET page's SPECIFIC topic, NOT the source cluster label.
+  The target URL slug (e.g. /erp-cost-timeline/, /manufacturing-erp-guide/) tells you exactly
+  what is unique about each target — use it. A target at /erp-cost-timeline/ should get an
+  anchor like "ERP implementation cost timeline", not the generic cluster name.
+- When one source URL links to multiple targets, each anchor MUST be different and must describe
+  what makes THAT specific target page distinctive from the others.
+- General rules: 3-7 words; never use "click here", "learn more", "read this", or the raw
+  cluster label verbatim; always describe the specific content of the target page.
+- One entry per source→target pair.
 """
 
 
@@ -523,10 +530,16 @@ def _enrich_anchor_texts(
                 "[content provided above]"
                 if has_content else "[no content — infer from URL/topic]"
             )
+            # Extract target slug so the AI can generate a unique anchor
+            # even when multiple targets share the same cluster topic.
+            tgt_path = urlparse(rec["target_url"]).path.rstrip("/")
+            tgt_slug = tgt_path.rsplit("/", 1)[-1] if "/" in tgt_path else tgt_path
+            tgt_slug_readable = tgt_slug.replace("-", " ").replace("_", " ")
             pairs_text.append(
                 f"{j}. source_url: {rec['source_url']} {content_tag}\n"
                 f"   source_topic: {src_context}\n"
                 f"   target_url: {rec['target_url']}\n"
+                f"   target_slug: {tgt_slug_readable}\n"
                 f"   target_topic: {tgt_context}"
             )
         messages = [
@@ -596,6 +609,35 @@ def _enrich_anchor_texts(
             if key in enrichment_map:
                 rec = {**rec, **enrichment_map[key]}
             enriched.append(rec)
+
+    # ── Safety-net: deduplicate anchor texts within the same source URL ───────
+    # The prompt enforces uniqueness, but this catches any AI slip-through.
+    seen_anchors: dict[str, set] = {}  # source_url -> set of lowercase anchors
+    for rec in enriched:
+        src = rec["source_url"]
+        anchor = rec.get("anchor_text", "").strip()
+        if not anchor:
+            continue
+        if src not in seen_anchors:
+            seen_anchors[src] = set()
+        anchor_lower = anchor.lower()
+        if anchor_lower in seen_anchors[src]:
+            # Disambiguate using the target URL slug
+            tgt_path = urlparse(rec["target_url"]).path.rstrip("/")
+            tgt_slug = (
+                tgt_path.rsplit("/", 1)[-1] if "/" in tgt_path else tgt_path
+            )
+            slug_words = (
+                tgt_slug.replace("-", " ").replace("_", " ").strip()[:50]
+            )
+            rec["anchor_text"] = slug_words if slug_words else anchor
+            logger.warning(
+                "Duplicate anchor '%s' from %s — replaced with '%s'",
+                anchor, src, rec["anchor_text"],
+            )
+            seen_anchors[src].add(rec["anchor_text"].lower())
+        else:
+            seen_anchors[src].add(anchor_lower)
 
     logger.info("Anchor text enrichment complete: %d links updated", len(enriched))
     return enriched
