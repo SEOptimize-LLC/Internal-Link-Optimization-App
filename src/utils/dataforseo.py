@@ -65,6 +65,39 @@ def _get_credentials() -> tuple[str, str]:
     return login, password
 
 
+def test_connection() -> tuple[bool, str]:
+    """
+    Validate credentials with a minimal 1-keyword API call.
+    Returns (success: bool, message: str).
+    """
+    login, password = _get_credentials()
+    if not login or not password:
+        return False, "Credentials not configured"
+    try:
+        data = _post(
+            "/keywords_data/google_ads/search_volume/live",
+            [{"keywords": ["test"], "location_code": 2840, "language_code": "en"}],
+        )
+        for task in data.get("tasks", []):
+            code = task.get("status_code", 0)
+            if code != 20000:
+                return False, (
+                    f"API error {code}: {task.get('status_message', 'unknown')}"
+                )
+        return True, "Connected"
+    except requests.HTTPError as e:
+        resp = e.response
+        if resp is not None:
+            if resp.status_code == 401:
+                return False, "HTTP 401 — login or password is wrong"
+            if resp.status_code == 403:
+                return False, "HTTP 403 — account does not have API access"
+            return False, f"HTTP {resp.status_code}: {resp.text[:120]}"
+        return False, f"Connection error: {e}"
+    except Exception as e:
+        return False, f"Error: {e}"
+
+
 # Common location codes for the UI selector
 LOCATION_OPTIONS = {
     "United States": 2840,

@@ -1,4 +1,5 @@
 import logging
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable
@@ -37,8 +38,8 @@ Rules:
 - Choose the MOST relevant money page based on topical alignment and business context
 - Anchor text must be natural and contextual — never use "click here" or generic phrases
 - Anchor text should reflect what the service/product actually does
-- placement_hint: be specific (intro, a named section, conclusion, etc.)
-- copy_snippet: use [anchor text]() as the hyperlink placeholder
+- placement_hint: target a specific body section — never the intro, Key Takeaways, or conclusion
+- copy_snippet: use [anchor text](target_url) with the actual target page URL filled in
 - If no money page is clearly relevant to a content page, omit it from recommendations
 """
 
@@ -65,26 +66,35 @@ Rules:
 - Choose contextually relevant source pages
 - Each orphan should get 2-3 incoming link recommendations
 - Anchor text must be descriptive and relevant
-- placement_hint: be specific about the section or context
-- copy_snippet: use [anchor text]() as the hyperlink placeholder
+- placement_hint: target a specific body section — never the intro, Key Takeaways, or conclusion
+- copy_snippet: use [anchor text](orphan_url) with the actual orphan page URL filled in
 """
 
 LINK_ENRICHMENT_SYSTEM_PROMPT = """You are an expert SEO content strategist specializing in contextual internal linking.
 
 For each source→target page pair, generate anchor text, a placement hint, and a copy snippet.
 
+SECTION TARGETING RULES (applies to both cases below):
+- ONLY target body content paragraphs — the substantive middle section of the article.
+- NEVER suggest the introduction/opening paragraph, Key Takeaways box, summary section,
+  or conclusion. These sections are structural and not appropriate for inline links.
+- Look for paragraphs that discuss a concept, process, or comparison where the target
+  page naturally extends the reader's understanding.
+
 WHEN source_content IS provided (pair marked [content provided]):
-- placement_hint: quote the first 12-18 words of the most relevant existing paragraph
+- placement_hint: quote the first 12-18 words of the most relevant BODY paragraph
   where the anchor fits naturally. The editor will use this exact quote to Ctrl+F the
   paragraph on their page — so it must be verbatim from the content.
-- copy_snippet: rewrite THAT SPECIFIC paragraph or sentence with [anchor text]()
-  naturally embedded. This is a drop-in replacement the editor can copy-paste directly.
+- copy_snippet: rewrite THAT SPECIFIC paragraph or sentence with [anchor text](target_url)
+  naturally embedded, where target_url is the actual target page URL from the pair.
+  This is a drop-in replacement the editor can copy-paste directly.
 
 WHEN source_content is NOT provided (pair marked [no content]):
-- placement_hint: describe the section or sentence where the link fits best
-  (e.g. "In the intro when comparing ERP options", "Near the conclusion on software choice")
-- copy_snippet: write a plausible 1-2 sentence passage for that context with
-  [anchor text]() embedded
+- placement_hint: describe a specific body section or concept where the link fits best
+  (e.g. "In the section comparing ERP pricing models", "When discussing implementation steps")
+  — NOT the intro, key takeaways, or conclusion.
+- copy_snippet: write a plausible 1-2 sentence body passage for that context with
+  [anchor text](target_url) embedded, where target_url is the actual target page URL
 
 Return a JSON object:
 {
@@ -639,6 +649,20 @@ def _enrich_anchor_texts(
         else:
             seen_anchors[src].add(anchor_lower)
 
+    # ── Fill any empty markdown links [text]() → [text](target_url) ──────────
+    # Prompts instruct the AI to use the actual URL, but this catches any
+    # cases where it still outputs an empty parenthesis placeholder.
+    for rec in enriched:
+        snippet = rec.get("copy_snippet", "")
+        if snippet and "()" in snippet:
+            target_url = rec.get("target_url", "")
+            if target_url:
+                rec["copy_snippet"] = re.sub(
+                    r"\[([^\]]+)\]\(\s*\)",
+                    lambda m, u=target_url: f"[{m.group(1)}]({u})",
+                    snippet,
+                )
+
     logger.info("Anchor text enrichment complete: %d links updated", len(enriched))
     return enriched
 
@@ -695,6 +719,19 @@ def generate_link_recommendations(
     if not all_recommendations:
         logger.warning("No link recommendations generated")
         return pd.DataFrame()
+
+    # ── Fill any remaining empty markdown links [text]() → [text](target_url) ─
+    # Catches P3 recs that bypassed _enrich_anchor_texts and any AI slip-through.
+    for rec in all_recommendations:
+        snippet = rec.get("copy_snippet", "")
+        if snippet and "()" in snippet:
+            target_url = rec.get("target_url", "")
+            if target_url:
+                rec["copy_snippet"] = re.sub(
+                    r"\[([^\]]+)\]\(\s*\)",
+                    lambda m, u=target_url: f"[{m.group(1)}]({u})",
+                    snippet,
+                )
 
     recommendations_df = pd.DataFrame(all_recommendations)
     recommendations_df = recommendations_df.sort_values(["priority", "silo_name"]).reset_index(drop=True)

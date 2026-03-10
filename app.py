@@ -353,10 +353,20 @@ if st.session_state.step == "setup":
             "Leave as-is if DataForSEO is not configured."
         )
 
-        from src.utils.dataforseo import LOCATION_OPTIONS, _get_credentials
+        from src.utils.dataforseo import (
+            LOCATION_OPTIONS, _get_credentials, test_connection,
+        )
         _dfs_login, _ = _get_credentials()
         if _dfs_login:
-            st.success("DataForSEO credentials found ✓", icon="✅")
+            col_badge, col_btn = st.columns([3, 1])
+            col_badge.success("DataForSEO credentials found ✓", icon="✅")
+            if col_btn.button("Test API", key="dfs_test"):
+                with st.spinner("Testing DataForSEO connection..."):
+                    ok, msg = test_connection()
+                if ok:
+                    st.success(f"DataForSEO API: {msg}", icon="✅")
+                else:
+                    st.error(f"DataForSEO API error: {msg}", icon="🚨")
         else:
             st.warning(
                 "DataForSEO credentials not found — keyword metrics will be skipped. "
