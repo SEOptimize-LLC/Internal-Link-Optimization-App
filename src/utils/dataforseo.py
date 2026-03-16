@@ -170,22 +170,26 @@ def _latest_monthly_sv(monthly_searches: list[dict] | None) -> int:
     return sorted_months[0].get("search_volume", 0) or 0 if sorted_months else 0
 
 
-_RE_NON_LATIN = re.compile(r"[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF]")
+_RE_STRIP_CHARS = re.compile(r"[^a-zA-Z0-9\s\-']")
 _MAX_KW_LEN = 80
 _MAX_KW_WORDS = 10
 
 
 def _clean_keywords(keywords: list[str]) -> list[str]:
-    """Filter out keywords that DFS will reject (too long, non-Latin, too many words).
+    """Clean keywords for DFS API: strip invalid chars, enforce length/word limits.
 
     DFS error 40501 rejects the ENTIRE batch if any single keyword is invalid,
-    so we must remove bad keywords before sending.
+    so we sanitise every keyword before sending.  Matches the approach from the
+    working Fetch-Data-For-SEO reference script.
     """
     cleaned = []
     removed = 0
-    for kw in keywords:
-        kw = kw.strip()
+    for raw in keywords:
+        # Strip non-alphanumeric chars (keep spaces, hyphens, apostrophes)
+        kw = _RE_STRIP_CHARS.sub("", raw)
+        kw = re.sub(r"\s+", " ", kw).strip()
         if not kw:
+            removed += 1
             continue
         if len(kw) > _MAX_KW_LEN:
             removed += 1
@@ -193,12 +197,9 @@ def _clean_keywords(keywords: list[str]) -> list[str]:
         if len(kw.split()) > _MAX_KW_WORDS:
             removed += 1
             continue
-        if _RE_NON_LATIN.search(kw):
-            removed += 1
-            continue
         cleaned.append(kw)
     if removed:
-        logger.info("DFS keyword cleaning: removed %d invalid keywords, %d remaining", removed, len(cleaned))
+        logger.info("DFS keyword cleaning: stripped/removed %d keywords, %d remaining", removed, len(cleaned))
     return cleaned
 
 
@@ -235,11 +236,23 @@ def fetch_keyword_metrics(
     if not keywords:
         return {}
 
-    keywords = _clean_keywords(keywords)
-    if not keywords:
+    # Build original→cleaned mapping so we can key results by original keyword
+    original_keywords = [kw.lower().strip() for kw in keywords]
+    cleaned = _clean_keywords(keywords)
+    if not cleaned:
         logger.warning("All keywords were filtered out during cleaning — no valid keywords to send to DFS")
         return {}
 
+    # Map cleaned (lowercase) → original (lowercase) for reverse lookup
+    _cleaned_to_original: dict[str, str] = {}
+    for raw in keywords:
+        raw_lower = raw.lower().strip()
+        c = _RE_STRIP_CHARS.sub("", raw)
+        c = re.sub(r"\s+", " ", c).strip().lower()
+        if c:
+            _cleaned_to_original[c] = raw_lower
+
+    keywords = cleaned  # use cleaned list for all API calls
     BATCH = 1000
 
     # ── 1. Google Ads search volume (from monthly_searches array) ─────────────
@@ -396,7 +409,13 @@ def fetch_keyword_metrics(
                 e,
             )
 
+    # Remap cleaned keys → original keyword keys so downstream lookups match
+    remapped: dict[str, dict] = {}
+    for cleaned_kw, metrics in results.items():
+        original_kw = _cleaned_to_original.get(cleaned_kw, cleaned_kw)
+        remapped[original_kw] = metrics
+
     logger.info(
-        "DataForSEO metrics fetched: %d/%d keywords have data", len(results), len(keywords)
+        "DataForSEO metrics fetched: %d/%d keywords have data", len(remapped), len(original_keywords)
     )
-    return results
+    return remapped
