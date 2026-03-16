@@ -157,6 +157,18 @@ def _post(endpoint: str, payload: list) -> dict:
     return response.json()
 
 
+def _latest_monthly_sv(monthly_searches: list[dict] | None) -> int:
+    """Extract latest month's search volume from the monthly_searches array."""
+    if not monthly_searches:
+        return 0
+    sorted_months = sorted(
+        monthly_searches,
+        key=lambda x: (x.get("year", 0), x.get("month", 0)),
+        reverse=True,
+    )
+    return sorted_months[0].get("search_volume", 0) or 0 if sorted_months else 0
+
+
 def fetch_keyword_metrics(
     keywords: list[str],
     location_code: int = 2840,
@@ -165,10 +177,9 @@ def fetch_keyword_metrics(
     """
     Fetch search volume and keyword difficulty from DataForSEO.
 
-    Search volume is the average of:
-      1. Google Ads search volume (location + language filtered, last 30 days)
-      2. Clickstream global search volume (last 30 days)
-    If only one source returns data for a keyword, that value is used as-is.
+    Search volume comes from the Google Ads monthly_searches array (latest month).
+    Clickstream global SV is blended in when available.
+    Keyword difficulty comes from the DataForSEO Labs endpoint (optional).
 
     Args:
         keywords: List of keyword strings to look up
@@ -191,10 +202,9 @@ def fetch_keyword_metrics(
     if not keywords:
         return {}
 
-    date_from, date_to = _last_30_days()
     BATCH = 1000
 
-    # ── 1. Google Ads search volume (location-specific, last 30 days) ─────────
+    # ── 1. Google Ads search volume (from monthly_searches array) ─────────────
     google_sv: dict[str, int] = {}
     google_meta: dict[str, dict] = {}  # competition + cpc come from Google Ads only
     total_sv_batches = -(-len(keywords) // BATCH)
@@ -208,8 +218,6 @@ def fetch_keyword_metrics(
                     "keywords": batch,
                     "location_code": location_code,
                     "language_code": language_code,
-                    "date_from": date_from,
-                    "date_to": date_to,
                 }],
             )
             for task in data.get("tasks", []):
@@ -226,7 +234,7 @@ def fetch_keyword_metrics(
                 for item in items:
                     kw = (item.get("keyword") or "").lower()
                     if kw:
-                        google_sv[kw] = item.get("search_volume") or 0
+                        google_sv[kw] = _latest_monthly_sv(item.get("monthly_searches"))
                         google_meta[kw] = {
                             "competition": round(item.get("competition") or 0.0, 2),
                             "cpc": round(item.get("cpc") or 0.0, 2),
@@ -239,7 +247,8 @@ def fetch_keyword_metrics(
                 e,
             )
 
-    # ── 2. Clickstream global search volume (last 30 days) ───────────────────
+    # ── 2. Clickstream global search volume (optional — requires plan access) ─
+    date_from, date_to = _last_30_days()
     clickstream_sv: dict[str, int] = {}
     total_cs_batches = -(-len(keywords) // BATCH)
 
@@ -277,7 +286,7 @@ def fetch_keyword_metrics(
                 e,
             )
 
-    # ── 3. Average the two search volume sources per keyword ──────────────────
+    # ── 3. Merge SV sources: prefer Google Ads, blend Clickstream when both ──
     results: dict[str, dict] = {}
     all_sv_keywords = set(google_sv.keys()) | set(clickstream_sv.keys())
 
@@ -298,9 +307,10 @@ def fetch_keyword_metrics(
             "keyword_difficulty": 0,
         }
 
+    sv_nonzero = sum(1 for v in google_sv.values() if v > 0)
     logger.info(
-        "Search volume sources — Google Ads: %d keywords, Clickstream: %d keywords, merged: %d keywords",
-        len(google_sv),
+        "Search volume sources — Google Ads: %d keywords (%d with SV>0), Clickstream: %d keywords, merged: %d keywords",
+        len(google_sv), sv_nonzero,
         len(clickstream_sv),
         len(results),
     )

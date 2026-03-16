@@ -865,13 +865,47 @@ elif st.session_state.step == "results":
             else:
                 st.caption("DataForSEO: no keyword metrics available — check credentials and API plan")
 
-            # Download button
-            st.download_button(
-                "⬇ Download Excel",
-                data=_to_excel(cluster_summary_df, sheet_name="Keyword Clusters"),
-                file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            # Build per-query flat report (one row per query with cluster assignment)
+            kw_metrics_flat = st.session_state.keyword_metrics or {}
+            per_query_rows = []
+            for cluster_id, cluster in clusters.items():
+                label = cluster["label"]
+                intent = cluster.get("intent", "")
+                for q in cluster.get("queries", []):
+                    q_lower = q.lower().strip()
+                    gsc = query_metrics.get(q_lower, {})
+                    dfs = kw_metrics_flat.get(q_lower, {})
+                    per_query_rows.append({
+                        "Query": q,
+                        "Cluster": label,
+                        "Intent": intent,
+                        "Clicks": gsc.get("clicks", 0),
+                        "Impressions": gsc.get("impressions", 0),
+                        "Monthly Searches": dfs.get("search_volume", 0),
+                        "KD": dfs.get("keyword_difficulty", 0),
+                        "Competition": dfs.get("competition", 0),
+                        "CPC": dfs.get("cpc", 0),
+                    })
+            per_query_df = pd.DataFrame(per_query_rows).sort_values(
+                ["Cluster", "Clicks"], ascending=[True, False]
+            ).reset_index(drop=True)
+
+            # Download buttons — cluster summary + per-query report
+            dl_col1, dl_col2 = st.columns(2)
+            with dl_col1:
+                st.download_button(
+                    "⬇ Cluster Summary (Excel)",
+                    data=_to_excel(cluster_summary_df, sheet_name="Cluster Summary"),
+                    file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            with dl_col2:
+                st.download_button(
+                    "⬇ All Queries by Cluster (Excel)",
+                    data=_to_excel(per_query_df, sheet_name="Queries by Cluster"),
+                    file_name=f"{st.session_state.client_name.replace(' ', '_')}_queries_by_cluster.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
             # Display table (hide Sample Queries column — too wide for table)
             display_df = cluster_summary_df.drop(columns=["Sample Queries"])
