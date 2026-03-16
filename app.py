@@ -778,6 +778,7 @@ elif st.session_state.step == "results":
                 data=_to_excel(filtered[dl_cols].rename(columns=dl_rename), sheet_name="Link Recommendations"),
                 file_name=f"{st.session_state.client_name.replace(' ', '_')}_link_recommendations.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="dl_recs_xlsx",
             )
 
             display_cols = ["priority", "source_url", "target_url", "anchor_text", "link_type", "silo_name", "reason"]
@@ -810,6 +811,7 @@ elif st.session_state.step == "results":
                 "⬇ Download Excel",
                 data=_to_excel(sorted_tax.rename(columns=tax_rename), sheet_name="Page Taxonomy"),
                 file_name=f"{st.session_state.client_name.replace(' ', '_')}_page_taxonomy.xlsx",
+                key="dl_taxonomy_xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
             st.dataframe(sorted_tax, use_container_width=True, height=500, hide_index=True)
@@ -898,12 +900,14 @@ elif st.session_state.step == "results":
                     data=_to_excel(cluster_summary_df, sheet_name="Cluster Summary"),
                     file_name=f"{st.session_state.client_name.replace(' ', '_')}_keyword_clusters.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="dl_clusters_xlsx",
                 )
             with dl_col2:
                 st.download_button(
                     "⬇ All Queries by Cluster (Excel)",
                     data=_to_excel(per_query_df, sheet_name="Queries by Cluster"),
                     file_name=f"{st.session_state.client_name.replace(' ', '_')}_queries_by_cluster.xlsx",
+                    key="dl_queries_xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
 

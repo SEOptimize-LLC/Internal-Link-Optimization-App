@@ -251,7 +251,7 @@ def cluster_keywords(
     location_code: int = 2840,
     language_code: str = "en",
     progress_callback: Callable[[str], None] = None,
-) -> dict:
+) -> tuple[dict, dict]:
     """
     Cluster GSC queries into semantic topic groups, optionally enriched with
     DataForSEO search volume and keyword difficulty data.
@@ -279,7 +279,7 @@ def cluster_keywords(
 
     if queries_df.empty:
         logger.warning("No queries to cluster")
-        return {}
+        return {}, {}
 
     business_context = profile.to_context_string()
 

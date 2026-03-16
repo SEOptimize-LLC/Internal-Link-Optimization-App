@@ -1,5 +1,6 @@
 import base64
 import logging
+import re
 from datetime import datetime, timedelta
 
 import requests
@@ -169,6 +170,38 @@ def _latest_monthly_sv(monthly_searches: list[dict] | None) -> int:
     return sorted_months[0].get("search_volume", 0) or 0 if sorted_months else 0
 
 
+_RE_NON_LATIN = re.compile(r"[^\x00-\x7F\u00C0-\u024F\u1E00-\u1EFF]")
+_MAX_KW_LEN = 80
+_MAX_KW_WORDS = 10
+
+
+def _clean_keywords(keywords: list[str]) -> list[str]:
+    """Filter out keywords that DFS will reject (too long, non-Latin, too many words).
+
+    DFS error 40501 rejects the ENTIRE batch if any single keyword is invalid,
+    so we must remove bad keywords before sending.
+    """
+    cleaned = []
+    removed = 0
+    for kw in keywords:
+        kw = kw.strip()
+        if not kw:
+            continue
+        if len(kw) > _MAX_KW_LEN:
+            removed += 1
+            continue
+        if len(kw.split()) > _MAX_KW_WORDS:
+            removed += 1
+            continue
+        if _RE_NON_LATIN.search(kw):
+            removed += 1
+            continue
+        cleaned.append(kw)
+    if removed:
+        logger.info("DFS keyword cleaning: removed %d invalid keywords, %d remaining", removed, len(cleaned))
+    return cleaned
+
+
 def fetch_keyword_metrics(
     keywords: list[str],
     location_code: int = 2840,
@@ -200,6 +233,11 @@ def fetch_keyword_metrics(
         return {}
 
     if not keywords:
+        return {}
+
+    keywords = _clean_keywords(keywords)
+    if not keywords:
+        logger.warning("All keywords were filtered out during cleaning — no valid keywords to send to DFS")
         return {}
 
     BATCH = 1000
